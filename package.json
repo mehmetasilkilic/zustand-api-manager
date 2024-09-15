@@ -1,6 +1,6 @@
 {
   "name": "zustand-api-manager",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A Zustand plugin for managing API states",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -14,7 +14,14 @@
     "state-management",
     "typescript"
   ],
-  "author": "mehmetasilkilic",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mehmetasilkilic/zustand-api-manager"
+  },
+  "author":{
+    "name": "Mehmet Asil Kılıç",
+    "url": "https://github.com/mehmetasilkilic/"
+  },
   "license": "MIT",
   "dependencies": {
     "immer": "^10.1.1",
