@@ -42,7 +42,7 @@ npm install zustand-api-manager
 1. First, enable the MapSet functionality in your main application file (e.g., `index.js` or `App.js`):
 
 ```javascript
-import { enableMapSet } from 'your-api-store-plugin';
+import { enableMapSet } from 'immer';
 
 enableMapSet();
 ```

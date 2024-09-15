@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
-import { enableMapSet } from "immer";
 import {
   ApiCallOptions,
   ApiComposerResult,
@@ -21,8 +20,6 @@ const initialApiState: ApiState<unknown> = {
 };
 
 const STORAGE_KEY = "api_store";
-
-export { enableMapSet };
 
 export const useApiStore = create<ApiStore>()(
   persist(
