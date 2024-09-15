@@ -59,7 +59,7 @@ function MyComponent() {
     useApiHandler<UserData, UserParams>("user");
 
   const params = {
-    userId: 13
+    id: 13
   }
 
   useEffect(() => {
@@ -77,7 +77,7 @@ function MyComponent() {
         persist: true;
       }
     );
-  }, [userId]); // Add userId as a dependency
+  }, []);
 
   if (isLoading) return <div>Loading...</div>;
   if (isError) return <div>Error occurred</div>;
