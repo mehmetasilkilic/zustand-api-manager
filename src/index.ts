@@ -20,8 +20,9 @@ const initialApiState: ApiState<unknown> = {
   error: null,
 };
 
-enableMapSet();
 const STORAGE_KEY = "api_store";
+
+export { enableMapSet };
 
 export const useApiStore = create<ApiStore>()(
   persist(

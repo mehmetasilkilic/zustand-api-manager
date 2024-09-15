@@ -39,13 +39,21 @@ npm install zustand-api-manager
 
 ### Basic Usage
 
-1. Import the necessary functions:
+1. First, enable the MapSet functionality in your main application file (e.g., `index.js` or `App.js`):
+
+```javascript
+import { enableMapSet } from 'your-api-store-plugin';
+
+enableMapSet();
+```
+
+2. Import the necessary functions:
 
 ```typescript
 import { useApiStore, useApiHandler, FetchStatus } from "zustand-api-store";
 ```
 
-2. Use the `useApiHandler` hook in your components:
+3. Use the `useApiHandler` hook in your components:
 
 ```typescript
 interface UserData {
