@@ -84,7 +84,7 @@ interface MyApiStructure {
   getUsers: ApiEndpoint<void, User[]>;
   getPost: ApiEndpoint<{ id: number }, Post>;
 
-  // You have to add this to precent TS error
+  // You have to add this to prevent TS error
   [key: string]: ApiEndpoint<any, any>;
 }
 
