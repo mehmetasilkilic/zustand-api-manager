@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
 [![downloads](https://img.shields.io/npm/dm/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
+[![GitHub](https://img.shields.io/github/stars/yourusername/zustand-api-manager?style=social)](https://github.com/mehmetasilkilic/zustand-api-manager)
 
 A powerful and flexible API state management solution built on top of Zustand.
 
