@@ -45,13 +45,26 @@ import { useApiStore, useApiHandler, FetchStatus } from "zustand-api-store";
 2. Use the `useApiHandler` hook in your components:
 
 ```typescript
+interface UserData {
+  id: number;
+  username: string;
+}
+
+interface UserParams {
+  id: number;
+}
+
 function MyComponent() {
   const { data, isLoading, isError, handleApi } =
-    useApiHandler<UserData>("user");
+    useApiHandler<UserData, UserParams>("user");
+
+  const params = {
+    userId: 13
+  }
 
   useEffect(() => {
     handleApi(
-      () => fetchUserData(userId), // API call
+      () => fetchUserData(params), // API call
       {
         onSuccess: () => {
           console.log("User data fetched successfully!");
