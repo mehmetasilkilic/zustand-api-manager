@@ -1,7 +1,7 @@
 # Zustand API Manager
 
-[![npm version](https://img.shields.io/npm/v/lyraus-ui.svg)](https://www.npmjs.com/package/zustand-api-manager)
-[![downloads](https://img.shields.io/npm/dm/lyraus-ui.svg)](https://www.npmjs.com/package/zustand-api-manager)
+[![npm version](https://img.shields.io/npm/v/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
+[![downloads](https://img.shields.io/npm/dm/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
 
 A powerful and flexible API state management solution built on top of Zustand.
 
