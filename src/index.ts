@@ -49,6 +49,8 @@ export const useApiStore = create<ApiStore>()(
           // Handle persistence if needed
           if (persist) {
             draft.persistentKeys.add(key);
+          } else {
+            draft.persistentKeys.delete(key);
           }
         }),
 
@@ -143,6 +145,16 @@ export const useApiStore = create<ApiStore>()(
         ),
         persistentKeys: Array.from(state.persistentKeys),
       }),
+      onRehydrateStorage: () => {
+        return (state, error) => {
+          if (error) {
+            console.error("Error rehydrating state:", error);
+          } else if (state) {
+            // Convert persistentKeys back to a Set
+            state.persistentKeys = new Set(state.persistentKeys);
+          }
+        };
+      },
     }
   )
 );
