@@ -191,19 +191,23 @@ export const useApiHandler = <T, P = void>(key: string) => {
   };
 };
 
-export function createApiComposer<
-  TApiStructure extends Record<string, ApiEndpoint<any, any>>
->() {
+export function createApiComposer<TApiStructure>() {
   return function useApiComposer<K extends keyof TApiStructure>(
     key: K
-  ): ApiComposerResult<
-    TApiStructure[K]["response"],
-    TApiStructure[K]["params"]
-  > {
+  ): TApiStructure[K] extends ApiEndpoint<any, any>
+    ? ApiComposerResult<
+        TApiStructure[K]["response"],
+        TApiStructure[K]["params"]
+      >
+    : never {
     const { apiStates, handleApi } = useApiStore();
 
     const apiState = apiStates[key as string] as
-      | ApiState<TApiStructure[K]["response"]>
+      | ApiState<
+          TApiStructure[K] extends ApiEndpoint<any, any>
+            ? TApiStructure[K]["response"]
+            : never
+        >
       | undefined;
 
     return {
@@ -214,10 +218,25 @@ export function createApiComposer<
       error: apiState?.error ?? null,
       handleApi: (
         apiCall: (
-          params: TApiStructure[K]["params"]
-        ) => Promise<{ data: TApiStructure[K]["response"] }>,
-        options?: ApiCallOptions<TApiStructure[K]["response"]>
+          params: TApiStructure[K] extends ApiEndpoint<any, any>
+            ? TApiStructure[K]["params"]
+            : never
+        ) => Promise<{
+          data: TApiStructure[K] extends ApiEndpoint<any, any>
+            ? TApiStructure[K]["response"]
+            : never;
+        }>,
+        options?: ApiCallOptions<
+          TApiStructure[K] extends ApiEndpoint<any, any>
+            ? TApiStructure[K]["response"]
+            : never
+        >
       ) => handleApi(key as string, apiCall, options),
-    };
+    } as TApiStructure[K] extends ApiEndpoint<any, any>
+      ? ApiComposerResult<
+          TApiStructure[K]["response"],
+          TApiStructure[K]["params"]
+        >
+      : never;
   };
 }
