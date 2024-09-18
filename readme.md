@@ -51,7 +51,7 @@ enableMapSet();
 2. Import the necessary functions:
 
 ```typescript
-import { useApiStore, useApiHandler, FetchStatus } from "zustand-api-store";
+import { useApiStore, useApiHandler, FetchStatus } from "zustand-api-manager";
 ```
 
 3. Use the `useApiHandler` hook in your components:
@@ -108,9 +108,6 @@ import { createApiComposer, ApiEndpoint } from "zustand-api-manager";
 interface MyApiStructure {
   getUsers: ApiEndpoint<void, User[]>;
   getPost: ApiEndpoint<{ id: number }, Post>;
-
-  // You have to add this to prevent TS error
-  [key: string]: ApiEndpoint<any, any>;
 }
 
 export const useApi = createApiComposer<MyApiStructure>();
@@ -120,7 +117,7 @@ export const useApi = createApiComposer<MyApiStructure>();
 
 ```typescript
 function UserProfile() {
-  const { data: userData, isLoading, handleApi } = useApi("user");
+  const { data: userData, isLoading, handleApi } = useApi("getUsers");
 
   useEffect(() => {
     handleApi(() => fetchUserData({ id: 1 }));
@@ -135,7 +132,7 @@ function UserProfile() {
 The `useLoadingStates` hook allows you to check the loading state of one or multiple API calls:
 
 ```typescript
-import { getLoadingStates } from "zustand-api-store";
+import { getLoadingStates } from "zustand-api-manager";
 
 function Dashboard() {
   // Check if any API is loading
