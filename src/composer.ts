@@ -57,6 +57,7 @@ export function createApiComposer<TApiStructure>(store?: UseBoundStore<StoreApi<
       | undefined
     const handleApi = useStore(state => state.handleApi)
     const resetApiState = useStore(state => state.resetApiState)
+    const invalidateApiState = useStore(state => state.invalidateApi)
 
     const composerHandleApi = (...args: unknown[]) => {
       let params: Params
@@ -88,7 +89,8 @@ export function createApiComposer<TApiStructure>(store?: UseBoundStore<StoreApi<
       error: apiState?.error ?? null,
       fetchedAt: apiState?.fetchedAt ?? null,
       handleApi: composerHandleApi,
-      resetApi: () => resetApiState(key as string)
+      resetApi: () => resetApiState(key as string),
+      invalidateApi: () => invalidateApiState(key as string)
     } as TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiComposerResult<R, P> : never
   }
 }

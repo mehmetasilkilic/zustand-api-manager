@@ -18,7 +18,11 @@ A powerful and flexible API state management solution built on top of Zustand.
 - [Middleware and Error Handling](#middleware-and-error-handling)
 - [Abort & Retry](#abort--retry)
 - [Caching with staleTime](#caching-with-staletime)
+- [Cache Invalidation](#cache-invalidation)
 - [Optimistic Updates](#optimistic-updates)
+- [Request Timeout](#request-timeout)
+- [Request Deduplication](#request-deduplication)
+- [Polling](#polling)
 - [Multiple Store Instances](#multiple-store-instances)
 - [TypeScript Support](#typescript-support)
 - [Contributing](#contributing)
@@ -42,10 +46,15 @@ npm install zustand-api-manager zustand immer
 - Middleware support for customizing API call behavior
 - Global error handling with unsubscribe support
 - Request cancellation via `AbortSignal` (including mid-retry abort)
-- Automatic retry with exponential back-off
+- Automatic retry with exponential back-off, customizable `shouldRetry` and `backoff` strategies
 - Race condition protection (stale responses are automatically discarded)
 - Built-in caching via `staleTime` — skip refetches when data is fresh
+- Cache invalidation via `invalidateApi` — mark data as stale without removing it
 - Optimistic updates with automatic rollback on error
+- Request timeout with `TIMEOUT` error code
+- Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
+- `onSettled` callback — runs after both success and error for cleanup
+- `usePolling` hook for interval-based refetching
 - `fetchedAt` timestamp tracking for every endpoint
 - SSR-safe (no `localStorage` access on the server)
 - Factory function for multiple isolated store instances with pre-bound hooks
@@ -192,6 +201,7 @@ The default singleton store for managing API states. Provides the following meth
 
 - `setApiState(key, state, persist?)` — Update the state for a specific API key
 - `resetApiState(key)` — Reset the state for a specific API key
+- `invalidateApi(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
 - `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
@@ -230,6 +240,7 @@ A hook for managing individual API calls. Returns an `ApiHandlerResult<T>` with:
 - `fetchedAt` — Timestamp (ms since epoch) of the last successful fetch, or `null`
 - `handleApi(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`
 - `resetApi()` — Reset the API state
+- `invalidateApi()` — Mark this endpoint's cache as stale
 
 Accepts an optional second argument to use a custom store instance:
 
@@ -248,9 +259,32 @@ A hook to check loading states for one or more API keys:
 
 Also accepts an optional store instance as the second argument.
 
+### `usePolling`
+
+A hook that calls a callback at a regular interval. Useful for polling an API endpoint:
+
+```typescript
+import { useApiHandler, usePolling } from "zustand-api-manager";
+
+function LiveDashboard() {
+  const { data, handleApi } = useApiHandler<Stats>("stats");
+
+  // Poll every 30 seconds
+  usePolling(() => handleApi(() => fetchStats()), 30_000);
+
+  // Pass null to disable polling
+  const [enabled, setEnabled] = useState(true);
+  usePolling(() => handleApi(() => fetchStats()), enabled ? 30_000 : null);
+
+  return <div>{data?.activeUsers} active users</div>;
+}
+```
+
+The callback reference is always kept up-to-date without restarting the interval. The interval is cleaned up automatically on unmount.
+
 ### `createApiComposer`
 
-Creates a strongly-typed API composer. Returns a hook with all the same fields as `useApiHandler`, including `resetApi`, `status`, and `fetchedAt`. Accepts an optional store instance:
+Creates a strongly-typed API composer. Returns a hook with all the same fields as `useApiHandler`, including `resetApi`, `invalidateApi`, `status`, and `fetchedAt`. Accepts an optional store instance:
 
 ```typescript
 const useApi = createApiComposer<MyApiStructure>(); // uses default store
@@ -272,11 +306,16 @@ Options you can pass to `handleApi`. The type parameter `T` is inferred automati
 
 - `onSuccess?: (data: T) => void` — called with the **typed** response data after a successful response
 - `onError?: (error: ApiError) => void` — called with the error after all retries are exhausted
+- `onSettled?: () => void` — called when the request completes, regardless of success or failure (useful for cleanup)
 - `persist?: boolean` — persist this key's state to localStorage
 - `signal?: AbortSignal` — abort the request (from an `AbortController`)
 - `retry?: number` — number of retries on failure (default `0`, exponential back-off)
+- `shouldRetry?: (error: ApiError, attempt: number) => boolean` — predicate to decide whether to retry a specific error (default: always retry)
+- `backoff?: (attempt: number) => number` — custom delay function in ms before retrying (default: `Math.min(1000 * 2 ** attempt, 10000)`)
 - `staleTime?: number` — skip the request if data was fetched within this many milliseconds
 - `optimisticData?: T` — data to show immediately while the request is in-flight (rolled back on error)
+- `timeout?: number` — abort the request if it doesn't complete within this many milliseconds (error code: `'TIMEOUT'`)
+- `dedupe?: boolean` — if `true`, concurrent calls to the same key share the existing in-flight promise
 
 ## Middleware and Error Handling
 
@@ -351,6 +390,36 @@ Set `retry` to automatically retry on failure with exponential back-off (capped 
 handleApi(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts)
 ```
 
+### Conditional retries with `shouldRetry`
+
+Use `shouldRetry` to skip retries for specific error types. The predicate receives the error and the current attempt index (0-based):
+
+```typescript
+handleApi(() => fetchData(), {
+  retry: 3,
+  shouldRetry: (error, attempt) => {
+    // Don't retry auth errors or client errors
+    if (error.status === 401 || error.status === 403) return false;
+    if (error.status && error.status >= 400 && error.status < 500) return false;
+    return true;
+  },
+});
+```
+
+### Custom back-off strategy
+
+Use `backoff` to provide a custom delay function. It receives the attempt index and should return the delay in milliseconds:
+
+```typescript
+handleApi(() => fetchData(), {
+  retry: 3,
+  // Linear back-off: 500ms, 1000ms, 1500ms
+  backoff: (attempt) => 500 * (attempt + 1),
+});
+```
+
+The default is exponential back-off capped at 10 seconds: `Math.min(1000 * 2 ** attempt, 10000)`.
+
 ### Race condition protection
 
 When multiple requests are made for the same key, only the latest request's result is applied. Earlier (stale) responses are automatically discarded. This happens transparently — no configuration needed.
@@ -373,6 +442,31 @@ function UserProfile({ userId }: { userId: number }) {
 ```
 
 The `staleTime` check uses the `fetchedAt` timestamp stored in each endpoint's state. You can also access `fetchedAt` directly from the hook result for custom freshness logic.
+
+## Cache Invalidation
+
+Use `invalidateApi` to mark a key's cache as stale without removing the existing data. The next `handleApi` call with `staleTime` will refetch instead of returning the cache:
+
+```typescript
+function UserSettings() {
+  const { data, handleApi, invalidateApi } = useApiHandler<User>("user");
+
+  const updateName = async (name: string) => {
+    await saveUserName(name);
+    // Mark the user cache as stale — data is still visible,
+    // but the next fetch with staleTime will hit the server
+    invalidateApi();
+  };
+
+  // ...
+}
+```
+
+You can also call `invalidateApi` directly on the store:
+
+```typescript
+useApiStore.getState().invalidateApi("user");
+```
 
 ## Optimistic Updates
 
@@ -399,6 +493,78 @@ function ToggleFavorite({ post }: { post: Post }) {
 ```
 
 During the optimistic update the status is `LOADING` and the optimistic data is available on `data`. On success, the real response replaces it. On error, it rolls back to whatever data was there before the call.
+
+## Request Timeout
+
+Use `timeout` to automatically abort a request that takes too long. The error will have code `'TIMEOUT'`:
+
+```typescript
+handleApi(() => fetchSlowEndpoint(), {
+  timeout: 5000, // abort after 5 seconds
+  onError: (error) => {
+    if (error.code === "TIMEOUT") {
+      showToast("Request timed out — please try again");
+    }
+  },
+});
+```
+
+When both `timeout` and `signal` are provided, whichever fires first wins. A user abort produces `'ABORT_ERR'`, while a timeout produces `'TIMEOUT'`.
+
+## Request Deduplication
+
+Use `dedupe` to prevent duplicate network calls when multiple components request the same data simultaneously. Concurrent calls to the same key will share a single in-flight promise:
+
+```typescript
+// In ComponentA
+handleApi(() => fetchUser(1), { dedupe: true });
+
+// In ComponentB (called at the same time)
+handleApi(() => fetchUser(1), { dedupe: true });
+// ^ reuses the promise from ComponentA — only one network request is made
+```
+
+Once the shared request completes, subsequent calls start a fresh request. Deduplication is opt-in and per-call.
+
+## Polling
+
+Use the `usePolling` hook to call a function at a regular interval:
+
+```typescript
+import { useApiHandler, usePolling } from "zustand-api-manager";
+
+function NotificationBell() {
+  const { data, handleApi } = useApiHandler<Notification[]>("notifications");
+
+  // Fetch notifications every 10 seconds
+  usePolling(() => handleApi(() => fetchNotifications()), 10_000);
+
+  return <span>({data?.length ?? 0})</span>;
+}
+```
+
+Pass `null` or `undefined` as the interval to disable polling dynamically:
+
+```typescript
+const [isActive, setIsActive] = useState(true);
+usePolling(() => handleApi(() => fetchData()), isActive ? 5_000 : null);
+```
+
+## The `onSettled` Callback
+
+Use `onSettled` to run cleanup logic after a request completes, regardless of whether it succeeded or failed:
+
+```typescript
+const [modalOpen, setModalOpen] = useState(true);
+
+handleApi(() => submitForm(data), {
+  onSuccess: () => showToast("Saved!"),
+  onError: (error) => showToast(`Failed: ${error.message}`),
+  onSettled: () => setModalOpen(false), // always close the modal
+});
+```
+
+`onSettled` is called after `onSuccess` or `onError`.
 
 ## Multiple Store Instances
 

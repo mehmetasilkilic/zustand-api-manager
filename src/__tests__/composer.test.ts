@@ -118,3 +118,24 @@ describe('createApiComposer — params passthrough', () => {
     expect(result.current.isSuccess).toBe(true)
   })
 })
+
+describe('createApiComposer — invalidateApi', () => {
+  it('clears fetchedAt while preserving data', async () => {
+    const { result } = renderHook(() => useApi('getUsers'))
+
+    await act(async () => {
+      await result.current.handleApi(() =>
+        Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
+      )
+    })
+    expect(result.current.fetchedAt).not.toBeNull()
+    expect(result.current.isSuccess).toBe(true)
+
+    act(() => {
+      result.current.invalidateApi()
+    })
+    expect(result.current.fetchedAt).toBeNull()
+    expect(result.current.data).toEqual([{ id: 1, name: 'Alice' }])
+    expect(result.current.isSuccess).toBe(true)
+  })
+})

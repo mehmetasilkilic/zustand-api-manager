@@ -99,6 +99,50 @@ export interface ApiCallOptions<T = unknown> {
    * On error, the state is rolled back to the previous data.
    */
   optimisticData?: T
+  /**
+   * Callback invoked when the API call completes, regardless of whether it succeeded or failed.
+   * Useful for cleanup logic like hiding modals or stopping spinners.
+   */
+  onSettled?: () => void
+  /**
+   * Timeout in milliseconds. If the request does not complete within this duration,
+   * it will be aborted with error code `'TIMEOUT'`.
+   */
+  timeout?: number
+  /**
+   * A predicate that determines whether a failed request should be retried.
+   * Receives the error and the current attempt index (0-based).
+   * Return `false` to stop retrying immediately. Defaults to always retry (up to `retry` count).
+   *
+   * @example
+   * ```ts
+   * handleApi('users', fetchUsers, {
+   *   retry: 3,
+   *   shouldRetry: (error) => error.status !== 401
+   * })
+   * ```
+   */
+  shouldRetry?: (error: ApiError, attempt: number) => boolean
+  /**
+   * A function that returns the delay in milliseconds before the next retry attempt.
+   * Receives the current attempt index (0-based). Defaults to exponential backoff
+   * capped at 10 seconds: `Math.min(1000 * 2 ** attempt, 10000)`.
+   *
+   * @example
+   * ```ts
+   * handleApi('users', fetchUsers, {
+   *   retry: 3,
+   *   backoff: (attempt) => 500 * (attempt + 1)
+   * })
+   * ```
+   */
+  backoff?: (attempt: number) => number
+  /**
+   * If `true`, concurrent calls to the same key will share the existing in-flight
+   * promise instead of starting a new request. Useful for preventing duplicate
+   * network calls when multiple components request the same data simultaneously.
+   */
+  dedupe?: boolean
 }
 
 /**
@@ -183,6 +227,15 @@ export interface ApiStore {
    * @param key - The unique identifier for the API endpoint to reset.
    */
   resetApiState: (key: string) => void
+
+  /**
+   * Mark a cached API key as stale by clearing its `fetchedAt` timestamp.
+   * The existing data remains visible, but the next `handleApi` call with
+   * `staleTime` will refetch instead of returning the cache.
+   *
+   * @param key - The unique identifier for the API endpoint to invalidate.
+   */
+  invalidateApi: (key: string) => void
 
   /**
    * Execute an API call with full lifecycle management: sets status to `LOADING`,
@@ -272,6 +325,8 @@ export interface ApiHandlerResult<T> {
   ) => Promise<T | undefined>
   /** Reset this endpoint's state back to idle and remove it from persistence. */
   resetApi: () => void
+  /** Mark this endpoint's cache as stale so the next call with `staleTime` will refetch. */
+  invalidateApi: () => void
 }
 
 /**
@@ -314,4 +369,6 @@ export interface ApiComposerResult<T, P = void> {
   ) => Promise<T | undefined>
   /** Reset this endpoint's state back to idle and remove it from persistence. */
   resetApi: () => void
+  /** Mark this endpoint's cache as stale so the next call with `staleTime` will refetch. */
+  invalidateApi: () => void
 }

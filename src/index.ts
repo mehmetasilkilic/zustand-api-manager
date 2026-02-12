@@ -1,6 +1,6 @@
 export * from './types'
 export { useApiStore } from './store'
-export { useLoadingStates, useApiHandler } from './hooks'
+export { useLoadingStates, useApiHandler, usePolling } from './hooks'
 export { createApiComposer } from './composer'
 
 import { createApiStore as createStoreInternal } from './store'

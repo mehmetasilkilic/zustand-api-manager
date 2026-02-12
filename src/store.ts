@@ -28,6 +28,46 @@ const abortableSleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 
+/** Races a promise against an AbortSignal so hanging requests can be interrupted. */
+const raceWithSignal = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) return promise
+  if (signal.aborted) {
+    promise.catch(() => {}) // prevent unhandled rejection from orphaned promise
+    return Promise.reject(new Error('Aborted'))
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+
+    const onAbort = () => {
+      if (!settled) {
+        settled = true
+        reject(new Error('Aborted'))
+      }
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    promise.then(
+      value => {
+        if (!settled) {
+          settled = true
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        }
+      },
+      error => {
+        if (!settled) {
+          settled = true
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        }
+        // If already settled via abort, swallow the rejection to prevent unhandled errors
+      }
+    )
+  })
+}
+
 /** SSR-safe fallback that returns a no-op storage when `localStorage` is unavailable. */
 const getSafeStorage = (): StateStorage => {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -41,6 +81,9 @@ const getSafeStorage = (): StateStorage => {
  * Tracks the latest request ID per API key so stale responses are discarded.
  */
 const activeRequests: Record<string, number> = {}
+
+/** Tracks in-flight promises per key for request deduplication. */
+const pendingRequests = new Map<string, Promise<unknown>>()
 
 /**
  * Creates a new Zustand store instance for managing API states.
@@ -88,21 +131,28 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           }),
 
         resetApiState: (key: string) => {
-          // Clean up race-condition counter to prevent memory leak
+          // Clean up race-condition counter and pending dedup to prevent memory leak
           delete activeRequests[key]
+          pendingRequests.delete(key)
           set(draft => {
             delete draft.apiStates[key]
             delete draft.persistentKeys[key]
           })
         },
 
-        handleApi: async <T>(
+        invalidateApi: (key: string) =>
+          set(draft => {
+            if (draft.apiStates[key]) {
+              draft.apiStates[key].fetchedAt = null
+            }
+          }),
+
+        handleApi: <T>(
           key: string,
           apiCall: () => Promise<{ data: T }>,
           options: ApiCallOptions<T> = {}
         ): Promise<T | undefined> => {
-          const { setApiState } = get()
-          const { retry = 0, staleTime, optimisticData } = options
+          const { staleTime, dedupe } = options
 
           // Cache / staleTime: skip fetch if data is fresh enough
           if (staleTime != null && staleTime > 0) {
@@ -112,128 +162,195 @@ export function createApiStore(config: ApiStoreConfig = {}) {
               existing.fetchedAt != null &&
               Date.now() - existing.fetchedAt < staleTime
             ) {
-              return existing.data as T
+              return Promise.resolve(existing.data as T)
             }
           }
 
-          // Race condition protection: increment the counter for this key
-          const requestId = (activeRequests[key] = (activeRequests[key] ?? 0) + 1)
-          const isStale = () => activeRequests[key] !== requestId
-
-          // Save previous data for optimistic rollback
-          const previousData = get().apiStates[key]?.data ?? null
-
-          // Optimistic update: set data immediately while request is in-flight
-          if (optimisticData !== undefined) {
-            setApiState<T>(
-              key,
-              { status: FetchStatus.LOADING, data: optimisticData },
-              options.persist
-            )
+          // Deduplication: return existing in-flight promise for this key
+          if (dedupe) {
+            const existing = pendingRequests.get(key)
+            if (existing) return existing as Promise<T | undefined>
           }
 
-          const handleError = (error: ApiError) => {
-            if (isStale()) return
-            // Roll back to previous data when optimistic update was used
-            const rollbackData = optimisticData !== undefined ? previousData : null
-            setApiState<T>(
-              key,
-              { status: FetchStatus.ERROR, error, data: rollbackData as T | null },
-              options.persist
-            )
-            // Read errorHandlers fresh to avoid stale closure references
-            get().errorHandlers.forEach(handler => handler(error, key))
-            options.onError?.(error)
-          }
+          const promise = (async (): Promise<T | undefined> => {
+            const { setApiState } = get()
+            const { retry = 0, optimisticData, timeout } = options
 
-          const baseHandler: ApiMiddlewareHandler = async (key, apiCall, options) => {
-            if (isStale()) return
+            // Timeout setup: create a combined signal that respects both user signal and timeout
+            let timeoutId: ReturnType<typeof setTimeout> | undefined
+            let timedOut = false
+            let effectiveOptions = options
 
-            // Only set LOADING if we didn't already set it via optimistic update
-            if (optimisticData === undefined) {
-              setApiState(key, { status: FetchStatus.LOADING }, options.persist)
-            }
+            if (timeout != null && timeout > 0) {
+              const timeoutController = new AbortController()
+              timeoutId = setTimeout(() => {
+                timedOut = true
+                timeoutController.abort()
+              }, timeout)
 
-            let lastError: ApiError | undefined
-            const maxAttempts = (options.retry ?? 0) + 1
-
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-              if (options.signal?.aborted) {
-                const abortError: ApiError = new Error('Aborted')
-                abortError.code = 'ABORT_ERR'
-                handleError(abortError)
-                return
+              // Forward user signal abort to timeout controller
+              if (options.signal) {
+                if (options.signal.aborted) {
+                  timeoutController.abort()
+                } else {
+                  options.signal.addEventListener('abort', () => timeoutController.abort(), {
+                    once: true
+                  })
+                }
               }
 
-              try {
-                const response = await apiCall()
-                if (isStale()) return
-                setApiState(
-                  key,
-                  {
-                    status: FetchStatus.SUCCESS,
-                    data: response.data,
-                    error: null,
-                    fetchedAt: Date.now()
-                  },
-                  options.persist
-                )
-                options.onSuccess?.(response.data)
-                return
-              } catch (error) {
-                if (isStale()) return
+              effectiveOptions = { ...options, signal: timeoutController.signal }
+            }
 
-                if (options.signal?.aborted) {
-                  const abortError: ApiError = new Error('Aborted')
-                  abortError.code = 'ABORT_ERR'
+            // Race condition protection: increment the counter for this key
+            const requestId = (activeRequests[key] = (activeRequests[key] ?? 0) + 1)
+            const isStale = () => activeRequests[key] !== requestId
+
+            // Save previous data for optimistic rollback
+            const previousData = get().apiStates[key]?.data ?? null
+
+            // Optimistic update: set data immediately while request is in-flight
+            if (optimisticData !== undefined) {
+              setApiState<T>(
+                key,
+                { status: FetchStatus.LOADING, data: optimisticData },
+                effectiveOptions.persist
+              )
+            }
+
+            const handleError = (error: ApiError) => {
+              if (isStale()) return
+              // Roll back to previous data when optimistic update was used
+              const rollbackData = optimisticData !== undefined ? previousData : null
+              setApiState<T>(
+                key,
+                { status: FetchStatus.ERROR, error, data: rollbackData as T | null },
+                effectiveOptions.persist
+              )
+              // Read errorHandlers fresh to avoid stale closure references
+              get().errorHandlers.forEach(handler => handler(error, key))
+              effectiveOptions.onError?.(error)
+            }
+
+            const baseHandler: ApiMiddlewareHandler = async (key, apiCall, opts) => {
+              if (isStale()) return
+
+              // Only set LOADING if we didn't already set it via optimistic update
+              if (optimisticData === undefined) {
+                setApiState(key, { status: FetchStatus.LOADING }, opts.persist)
+              }
+
+              let lastError: ApiError | undefined
+              const maxAttempts = (opts.retry ?? 0) + 1
+              const backoffFn =
+                opts.backoff ?? ((attempt: number) => Math.min(1000 * 2 ** attempt, 10000))
+
+              for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                if (opts.signal?.aborted) {
+                  const abortError: ApiError = new Error(
+                    timedOut ? 'Request timed out' : 'Aborted'
+                  )
+                  abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
                   handleError(abortError)
                   return
                 }
 
-                const apiError: ApiError =
-                  error instanceof Error ? error : new Error('An unknown error occurred')
-                if (error && typeof error === 'object' && 'status' in error) {
-                  apiError.status = error.status as number
-                }
-                if (error && typeof error === 'object' && 'code' in error) {
-                  apiError.code = error.code as string
-                }
-                lastError = apiError
+                try {
+                  const response = await raceWithSignal(apiCall(), opts.signal)
+                  if (isStale()) return
+                  setApiState(
+                    key,
+                    {
+                      status: FetchStatus.SUCCESS,
+                      data: response.data,
+                      error: null,
+                      fetchedAt: Date.now()
+                    },
+                    opts.persist
+                  )
+                  opts.onSuccess?.(response.data)
+                  return
+                } catch (error) {
+                  if (isStale()) return
 
-                if (attempt < maxAttempts - 1) {
-                  try {
-                    await abortableSleep(Math.min(1000 * 2 ** attempt, 10000), options.signal)
-                  } catch {
-                    // Sleep was aborted — treat as abort error
-                    const abortError: ApiError = new Error('Aborted')
-                    abortError.code = 'ABORT_ERR'
+                  if (opts.signal?.aborted) {
+                    const abortError: ApiError = new Error(
+                      timedOut ? 'Request timed out' : 'Aborted'
+                    )
+                    abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
                     handleError(abortError)
                     return
                   }
+
+                  const apiError: ApiError =
+                    error instanceof Error ? error : new Error('An unknown error occurred')
+                  if (error && typeof error === 'object' && 'status' in error) {
+                    apiError.status = error.status as number
+                  }
+                  if (error && typeof error === 'object' && 'code' in error) {
+                    apiError.code = error.code as string
+                  }
+
+                  // Check shouldRetry predicate
+                  if (opts.shouldRetry && !opts.shouldRetry(apiError, attempt)) {
+                    handleError(apiError)
+                    return
+                  }
+
+                  lastError = apiError
+
+                  if (attempt < maxAttempts - 1) {
+                    try {
+                      await abortableSleep(backoffFn(attempt), opts.signal)
+                    } catch {
+                      // Sleep was aborted — treat as abort/timeout error
+                      const abortError: ApiError = new Error(
+                        timedOut ? 'Request timed out' : 'Aborted'
+                      )
+                      abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
+                      handleError(abortError)
+                      return
+                    }
+                  }
                 }
+              }
+
+              if (lastError) {
+                handleError(lastError)
               }
             }
 
-            if (lastError) {
-              handleError(lastError)
+            // Read middleware fresh at call time
+            const composedHandler = get().middleware.reduce<ApiMiddlewareHandler>(
+              (next, mid) => mid(next),
+              baseHandler
+            )
+
+            try {
+              await composedHandler(key, apiCall, { ...effectiveOptions, retry })
+            } finally {
+              // Clean up timeout timer
+              if (timeoutId) clearTimeout(timeoutId)
+              // Call onSettled regardless of outcome (but not for stale/dedup callers)
+              options.onSettled?.()
             }
+
+            // Return the data if the request succeeded and wasn't superseded
+            if (isStale()) return undefined
+            const finalState = get().apiStates[key]
+            if (finalState?.status === FetchStatus.SUCCESS) {
+              return finalState.data as T
+            }
+            return undefined
+          })()
+
+          // Track for deduplication
+          if (dedupe) {
+            pendingRequests.set(key, promise)
+            promise.finally(() => pendingRequests.delete(key))
           }
 
-          // Read middleware fresh at call time
-          const composedHandler = get().middleware.reduce<ApiMiddlewareHandler>(
-            (next, mid) => mid(next),
-            baseHandler
-          )
-
-          await composedHandler(key, apiCall, { ...options, retry })
-
-          // Return the data if the request succeeded and wasn't superseded
-          if (isStale()) return undefined
-          const finalState = get().apiStates[key]
-          if (finalState?.status === FetchStatus.SUCCESS) {
-            return finalState.data as T
-          }
-          return undefined
+          return promise
         },
 
         addMiddleware: middleware => {

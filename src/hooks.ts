@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useApiStore } from './store'
 import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
@@ -73,6 +74,7 @@ export const useApiHandler = <T>(
   const apiState = useStore(state => state.apiStates[key])
   const handleApi = useStore(state => state.handleApi)
   const resetApiState = useStore(state => state.resetApiState)
+  const invalidateApi = useStore(state => state.invalidateApi)
 
   return {
     status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
@@ -85,6 +87,39 @@ export const useApiHandler = <T>(
     fetchedAt: apiState?.fetchedAt ?? null,
     handleApi: (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
       handleApi<T>(key, apiCall, options),
-    resetApi: () => resetApiState(key)
+    resetApi: () => resetApiState(key),
+    invalidateApi: () => invalidateApi(key)
   }
+}
+
+/**
+ * A React hook that calls a callback at a regular interval.
+ * Useful for polling an API endpoint on a timer.
+ *
+ * The callback reference is always kept up-to-date without restarting the interval.
+ * Pass `null` or `undefined` as the interval to disable polling.
+ *
+ * @param callback - The function to call on each interval tick.
+ * @param interval - The interval in milliseconds, or `null`/`undefined` to disable.
+ *
+ * @example
+ * ```tsx
+ * const { handleApi } = useApiHandler<User[]>('users')
+ *
+ * usePolling(() => handleApi(fetchUsers), 30_000)
+ * ```
+ */
+export const usePolling = (
+  callback: () => void | Promise<void>,
+  interval: number | null | undefined
+): void => {
+  const callbackRef = useRef(callback)
+  callbackRef.current = callback
+
+  useEffect(() => {
+    if (interval == null || interval <= 0) return
+
+    const id = setInterval(() => callbackRef.current(), interval)
+    return () => clearInterval(id)
+  }, [interval])
 }
