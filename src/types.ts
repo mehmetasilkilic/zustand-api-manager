@@ -20,6 +20,8 @@ export interface ApiCallOptions {
   onSuccess?: () => void
   onError?: () => void
   persist?: boolean
+  signal?: AbortSignal
+  retry?: number
 }
 
 export interface ApiEndpoint<P, R> {
@@ -37,14 +39,14 @@ export type ApiMiddleware = (next: ApiMiddlewareHandler) => ApiMiddlewareHandler
 
 export interface ApiStore {
   apiStates: Record<string, ApiState<unknown>>
-  persistentKeys: Set<string>
+  persistentKeys: Record<string, boolean>
   middleware: ApiMiddleware[]
   errorHandlers: ((error: ApiError, key: string) => void)[]
   setApiState: <T>(key: string, state: Partial<ApiState<T>>, persist?: boolean) => void
   resetApiState: (key: string) => void
-  handleApi: <T, P = void>(
+  handleApi: <T>(
     key: string,
-    apiCall: (params: P) => Promise<{ data: T }>,
+    apiCall: () => Promise<{ data: T }>,
     options?: ApiCallOptions
   ) => Promise<void>
   addMiddleware: (middleware: ApiMiddleware) => void
@@ -53,6 +55,7 @@ export interface ApiStore {
 
 export interface ApiComposerResult<T, P = void> {
   data: T | null
+  isIdle: boolean
   isLoading: boolean
   isSuccess: boolean
   isError: boolean

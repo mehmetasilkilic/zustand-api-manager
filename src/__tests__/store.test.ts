@@ -8,7 +8,7 @@ const getState = () => useApiStore.getState()
 beforeEach(() => {
   useApiStore.setState({
     apiStates: {},
-    persistentKeys: new Set<string>(),
+    persistentKeys: {},
     middleware: [],
     errorHandlers: []
   })
@@ -36,14 +36,14 @@ describe('setApiState', () => {
 
   it('adds key to persistentKeys when persist=true', () => {
     getState().setApiState('users', { status: FetchStatus.IDLE }, true)
-    expect(getState().persistentKeys.has('users')).toBe(true)
+    expect(getState().persistentKeys['users']).toBe(true)
   })
 
   it('removes key from persistentKeys when persist=false', () => {
     getState().setApiState('users', { status: FetchStatus.IDLE }, true)
-    expect(getState().persistentKeys.has('users')).toBe(true)
+    expect(getState().persistentKeys['users']).toBe(true)
     getState().setApiState('users', { status: FetchStatus.IDLE }, false)
-    expect(getState().persistentKeys.has('users')).toBe(false)
+    expect(getState().persistentKeys['users']).toBeUndefined()
   })
 })
 
@@ -59,7 +59,7 @@ describe('resetApiState', () => {
   it('removes key from persistentKeys', () => {
     getState().setApiState('users', { status: FetchStatus.IDLE }, true)
     getState().resetApiState('users')
-    expect(getState().persistentKeys.has('users')).toBe(false)
+    expect(getState().persistentKeys['users']).toBeUndefined()
   })
 })
 
@@ -162,15 +162,81 @@ describe('handleApi — persistence', () => {
   it('respects persist option during loading and success', async () => {
     const apiCall = () => Promise.resolve({ data: 'ok' })
     await getState().handleApi('users', apiCall, { persist: true })
-    expect(getState().persistentKeys.has('users')).toBe(true)
+    expect(getState().persistentKeys['users']).toBe(true)
     expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
   })
 
   it('respects persist option during error', async () => {
     const apiCall = () => Promise.reject(new Error('fail'))
     await getState().handleApi('users', apiCall, { persist: true })
-    expect(getState().persistentKeys.has('users')).toBe(true)
+    expect(getState().persistentKeys['users']).toBe(true)
     expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+  })
+})
+
+// ── handleApi — abort ────────────────────────────────────────
+
+describe('handleApi — abort', () => {
+  it('sets ERROR with ABORT_ERR when signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+    await getState().handleApi('users', apiCall, { signal: controller.signal })
+    const state = getState().apiStates['users']
+    expect(state.status).toBe(FetchStatus.ERROR)
+    expect(state.error!.code).toBe('ABORT_ERR')
+  })
+
+  it('does not call onSuccess when aborted before resolve', async () => {
+    const controller = new AbortController()
+    const onSuccess = vi.fn()
+    const apiCall = () =>
+      new Promise<{ data: string }>((_, reject) => {
+        controller.abort()
+        reject(new Error('aborted'))
+      })
+    await getState().handleApi('users', apiCall, { signal: controller.signal, onSuccess })
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(getState().apiStates['users'].error!.code).toBe('ABORT_ERR')
+  })
+})
+
+// ── handleApi — retry ────────────────────────────────────────
+
+describe('handleApi — retry', () => {
+  it('retries the specified number of times before failing', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.reject(new Error('fail')))
+
+    const promise = getState().handleApi('users', apiCall, { retry: 2 })
+
+    // Flush all pending timers (retry back-off sleeps)
+    await vi.runAllTimersAsync()
+    await promise
+
+    // 1 initial + 2 retries = 3 total calls
+    expect(apiCall).toHaveBeenCalledTimes(3)
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    vi.useRealTimers()
+  })
+
+  it('succeeds on a retry without hitting error state', async () => {
+    vi.useFakeTimers()
+    let callCount = 0
+    const apiCall = () => {
+      callCount++
+      if (callCount < 3) return Promise.reject(new Error('fail'))
+      return Promise.resolve({ data: 'recovered' })
+    }
+
+    const promise = getState().handleApi('users', apiCall, { retry: 3 })
+    await vi.runAllTimersAsync()
+    await promise
+
+    expect(callCount).toBe(3)
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['users'].data).toBe('recovered')
+    vi.useRealTimers()
   })
 })
 

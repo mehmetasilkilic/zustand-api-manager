@@ -11,11 +11,13 @@ import {
   FetchStatus
 } from './types'
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
 export const useApiStore = create<ApiStore>()(
   persist(
     immer((set, get) => ({
       apiStates: {},
-      persistentKeys: new Set<string>(),
+      persistentKeys: {} as Record<string, boolean>,
       middleware: [],
       errorHandlers: [],
 
@@ -29,24 +31,25 @@ export const useApiStore = create<ApiStore>()(
           Object.assign(prevState, state)
 
           if (shouldPersist) {
-            draft.persistentKeys.add(key)
+            draft.persistentKeys[key] = true
           } else {
-            draft.persistentKeys.delete(key)
+            delete draft.persistentKeys[key]
           }
         }),
 
       resetApiState: (key: string) =>
         set(draft => {
           delete draft.apiStates[key]
-          draft.persistentKeys.delete(key)
+          delete draft.persistentKeys[key]
         }),
 
-      handleApi: async <T, P = void>(
+      handleApi: async <T>(
         key: string,
-        apiCall: (params: P) => Promise<{ data: T }>,
+        apiCall: () => Promise<{ data: T }>,
         options: ApiCallOptions = {}
       ) => {
         const { setApiState, errorHandlers, middleware } = get()
+        const { retry = 0 } = options
 
         const handleError = (error: ApiError) => {
           setApiState<T>(key, { status: FetchStatus.ERROR, error, data: null }, options.persist)
@@ -56,24 +59,53 @@ export const useApiStore = create<ApiStore>()(
 
         const baseHandler: ApiMiddlewareHandler = async (key, apiCall, options) => {
           setApiState(key, { status: FetchStatus.LOADING }, options.persist)
-          try {
-            const response = await apiCall()
-            setApiState(
-              key,
-              { status: FetchStatus.SUCCESS, data: response.data, error: null },
-              options.persist
-            )
-            options.onSuccess?.()
-          } catch (error) {
-            const apiError: ApiError =
-              error instanceof Error ? error : new Error('An unknown error occurred')
-            if (error && typeof error === 'object' && 'status' in error) {
-              apiError.status = error.status as number
+
+          let lastError: ApiError | undefined
+          const maxAttempts = (options.retry ?? 0) + 1
+
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            if (options.signal?.aborted) {
+              const abortError: ApiError = new Error('Aborted')
+              abortError.code = 'ABORT_ERR'
+              handleError(abortError)
+              return
             }
-            if (error && typeof error === 'object' && 'code' in error) {
-              apiError.code = error.code as string
+
+            try {
+              const response = await apiCall()
+              setApiState(
+                key,
+                { status: FetchStatus.SUCCESS, data: response.data, error: null },
+                options.persist
+              )
+              options.onSuccess?.()
+              return
+            } catch (error) {
+              if (options.signal?.aborted) {
+                const abortError: ApiError = new Error('Aborted')
+                abortError.code = 'ABORT_ERR'
+                handleError(abortError)
+                return
+              }
+
+              const apiError: ApiError =
+                error instanceof Error ? error : new Error('An unknown error occurred')
+              if (error && typeof error === 'object' && 'status' in error) {
+                apiError.status = error.status as number
+              }
+              if (error && typeof error === 'object' && 'code' in error) {
+                apiError.code = error.code as string
+              }
+              lastError = apiError
+
+              if (attempt < maxAttempts - 1) {
+                await sleep(Math.min(1000 * 2 ** attempt, 10000))
+              }
             }
-            handleError(apiError)
+          }
+
+          if (lastError) {
+            handleError(lastError)
           }
         }
 
@@ -82,7 +114,7 @@ export const useApiStore = create<ApiStore>()(
           baseHandler
         )
 
-        await composedHandler(key, apiCall as () => Promise<{ data: T }>, options)
+        await composedHandler(key, apiCall, { ...options, retry })
       },
 
       addMiddleware: middleware =>
@@ -98,15 +130,13 @@ export const useApiStore = create<ApiStore>()(
       storage: createJSONStorage(() => localStorage),
       partialize: state => ({
         apiStates: Object.fromEntries(
-          Object.entries(state.apiStates).filter(([key]) => state.persistentKeys.has(key))
+          Object.entries(state.apiStates).filter(([key]) => state.persistentKeys[key])
         ),
-        persistentKeys: Array.from(state.persistentKeys)
+        persistentKeys: state.persistentKeys
       }),
-      onRehydrateStorage: () => (state, error) => {
+      onRehydrateStorage: () => (_state, error) => {
         if (error) {
           console.error('Error rehydrating state:', error)
-        } else if (state) {
-          state.persistentKeys = new Set(state.persistentKeys)
         }
       }
     }

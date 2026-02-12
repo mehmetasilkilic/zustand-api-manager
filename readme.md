@@ -16,6 +16,7 @@ A powerful and flexible API state management solution built on top of Zustand.
   - [Advanced Usage](#advanced-usage)
 - [API Reference](#api-reference)
 - [Middleware and Error Handling](#middleware-and-error-handling)
+- [Abort & Retry](#abort--retry)
 - [TypeScript Support](#typescript-support)
 - [Contributing](#contributing)
 - [License](#license)
@@ -30,31 +31,25 @@ npm install zustand-api-manager
 
 - Easy-to-use API state management
 - Built on top of Zustand for efficient state updates
-- Support for loading, success, and error states
+- Support for idle, loading, success, and error states
 - Persistent state options
 - Middleware support for customizing API call behavior
 - Global error handling
+- Request cancellation via `AbortSignal`
+- Automatic retry with exponential back-off
 - TypeScript support with strong typing
 
 ## Usage
 
 ### Basic Usage
 
-1. First, enable the MapSet functionality in your main application file (e.g., `index.js` or `App.js`):
-
-```javascript
-import { enableMapSet } from 'immer';
-
-enableMapSet();
-```
-
-2. Import the necessary functions:
+1. Import the necessary functions:
 
 ```typescript
-import { useApiStore, useApiHandler, FetchStatus } from "zustand-api-manager";
+import { useApiHandler, FetchStatus } from "zustand-api-manager";
 ```
 
-3. Use the `useApiHandler` hook in your components:
+2. Use the `useApiHandler` hook in your components:
 
 ```typescript
 interface UserData {
@@ -62,39 +57,32 @@ interface UserData {
   username: string;
 }
 
-interface UserParams {
-  id: number;
-}
-
 function MyComponent() {
-  const { data, isLoading, isError, handleApi } =
-    useApiHandler<UserData, UserParams>("user");
+  const { data, isIdle, isLoading, isError, handleApi } =
+    useApiHandler<UserData>("user");
 
-  const params = {
-    id: 13
-  }
+  const params = { id: 13 };
 
   useEffect(() => {
     handleApi(
-      () => fetchUserData(params), // API call
+      () => fetchUserData(params), // API call (close over your params)
       {
         onSuccess: () => {
           console.log("User data fetched successfully!");
-          // Add any other success logic here
         },
         onError: () => {
           console.error("An error occurred while fetching user data.");
-          // Handle the error or show additional UI feedback here
         },
-        persist: true;
+        persist: true
       }
     );
   }, []);
 
+  if (isIdle) return <div>Ready to fetch</div>;
   if (isLoading) return <div>Loading...</div>;
   if (isError) return <div>Error occurred</div>;
 
-  return <div>{data?.name}</div>;
+  return <div>{data?.username}</div>;
 }
 ```
 
@@ -132,17 +120,17 @@ function UserProfile() {
 The `useLoadingStates` hook allows you to check the loading state of one or multiple API calls:
 
 ```typescript
-import { getLoadingStates } from "zustand-api-manager";
+import { useLoadingStates } from "zustand-api-manager";
 
 function Dashboard() {
   // Check if any API is loading
-  const isAnyLoading = getLoadingStates();
+  const isAnyLoading = useLoadingStates();
 
   // Check if specific APIs are loading
-  const isUserOrPostsLoading = getLoadingStates(["user", "posts"]);
+  const isUserOrPostsLoading = useLoadingStates(["user", "posts"]);
 
   // Check if a single API is loading
-  const isUserLoading = getLoadingStates("user");
+  const isUserLoading = useLoadingStates("user");
 
   return (
     <div>
@@ -164,7 +152,6 @@ The main store for managing API states. Provides the following methods:
 - `setApiState`: Update the state for a specific API key
 - `resetApiState`: Reset the state for a specific API key
 - `handleApi`: Handle an API call with automatic state management
-- `getLoadingStates`: Check loading states for one or more API keys
 - `addMiddleware`: Add middleware to customize API call behavior
 - `addErrorHandler`: Add a global error handler
 
@@ -172,6 +159,7 @@ The main store for managing API states. Provides the following methods:
 
 A hook for managing individual API calls. Returns an object with:
 
+- `isIdle`: Boolean indicating if the API has not been called yet
 - `isLoading`: Boolean indicating if the API is currently loading
 - `isError`: Boolean indicating if an error occurred
 - `isSuccess`: Boolean indicating if the API call was successful
@@ -179,6 +167,14 @@ A hook for managing individual API calls. Returns an object with:
 - `error`: Any error that occurred during the API call
 - `handleApi`: Function to trigger the API call
 - `resetApi`: Function to reset the API state
+
+### `useLoadingStates`
+
+A hook to check loading states for one or more API keys:
+
+- No arguments: returns `true` if **any** API is loading
+- `string`: returns `true` if the given key is loading
+- `string[]`: returns `true` if **any** of the given keys are loading
 
 ### `createApiComposer`
 
@@ -192,6 +188,16 @@ An enum representing the different states of an API call:
 - `LOADING`
 - `SUCCESS`
 - `ERROR`
+
+### `ApiCallOptions`
+
+Options you can pass to `handleApi`:
+
+- `onSuccess?: () => void` — called after a successful response
+- `onError?: () => void` — called after all retries are exhausted
+- `persist?: boolean` — persist this key's state to localStorage
+- `signal?: AbortSignal` — abort the request (from an `AbortController`)
+- `retry?: number` — number of retries on failure (default `0`, exponential back-off)
 
 ## Middleware and Error Handling
 
@@ -211,6 +217,39 @@ apiStore.addMiddleware((next) => async (key, apiCall, options) => {
 apiStore.addErrorHandler((error, key) => {
   console.error(`Error in API call ${key}:`, error);
 });
+```
+
+## Abort & Retry
+
+### Cancelling requests
+
+Pass an `AbortSignal` to cancel an in-flight request:
+
+```typescript
+function SearchComponent() {
+  const { data, isLoading, handleApi } = useApiHandler<SearchResult[]>("search");
+  const controllerRef = useRef<AbortController>();
+
+  const onSearch = (query: string) => {
+    // Cancel the previous request
+    controllerRef.current?.abort();
+    controllerRef.current = new AbortController();
+
+    handleApi(() => searchApi(query), {
+      signal: controllerRef.current.signal
+    });
+  };
+
+  // ...
+}
+```
+
+### Retrying failed requests
+
+Set `retry` to automatically retry on failure with exponential back-off:
+
+```typescript
+handleApi(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts)
 ```
 
 ## TypeScript Support

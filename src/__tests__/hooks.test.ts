@@ -1,136 +1,165 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
-import { ApiCallOptions, FetchStatus } from '../types'
-
-const getState = () => useApiStore.getState()
+import { useLoadingStates, useApiHandler } from '../hooks'
+import { FetchStatus } from '../types'
 
 beforeEach(() => {
   useApiStore.setState({
     apiStates: {},
-    persistentKeys: new Set<string>(),
+    persistentKeys: {},
     middleware: [],
     errorHandlers: []
   })
 })
 
-// ── useLoadingStates (tested via store state) ────────────────
+// ── useLoadingStates ─────────────────────────────────────────
 
-describe('useLoadingStates logic', () => {
+describe('useLoadingStates', () => {
   it('returns true when any state is LOADING (no keys filter)', () => {
-    getState().setApiState('a', { status: FetchStatus.IDLE })
-    getState().setApiState('b', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('a', { status: FetchStatus.IDLE })
+    useApiStore.getState().setApiState('b', { status: FetchStatus.LOADING })
 
-    const { apiStates } = getState()
-    const anyLoading = Object.values(apiStates).some(s => s.status === FetchStatus.LOADING)
-    expect(anyLoading).toBe(true)
+    const { result } = renderHook(() => useLoadingStates())
+    expect(result.current).toBe(true)
   })
 
   it('returns false when nothing is loading', () => {
-    getState().setApiState('a', { status: FetchStatus.SUCCESS })
-    getState().setApiState('b', { status: FetchStatus.IDLE })
+    useApiStore.getState().setApiState('a', { status: FetchStatus.SUCCESS })
+    useApiStore.getState().setApiState('b', { status: FetchStatus.IDLE })
 
-    const { apiStates } = getState()
-    const anyLoading = Object.values(apiStates).some(s => s.status === FetchStatus.LOADING)
-    expect(anyLoading).toBe(false)
+    const { result } = renderHook(() => useLoadingStates())
+    expect(result.current).toBe(false)
   })
 
   it('returns true for a specific loading key', () => {
-    getState().setApiState('a', { status: FetchStatus.LOADING })
-    getState().setApiState('b', { status: FetchStatus.SUCCESS })
+    useApiStore.getState().setApiState('a', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('b', { status: FetchStatus.SUCCESS })
 
-    const { apiStates } = getState()
-    const keys = ['a']
-    const isLoading = keys.some(key => apiStates[key]?.status === FetchStatus.LOADING)
-    expect(isLoading).toBe(true)
+    const { result } = renderHook(() => useLoadingStates(['a']))
+    expect(result.current).toBe(true)
   })
 
   it('returns false for a specific non-loading key', () => {
-    getState().setApiState('a', { status: FetchStatus.LOADING })
-    getState().setApiState('b', { status: FetchStatus.SUCCESS })
+    useApiStore.getState().setApiState('a', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('b', { status: FetchStatus.SUCCESS })
 
-    const { apiStates } = getState()
-    const keys = ['b']
-    const isLoading = keys.some(key => apiStates[key]?.status === FetchStatus.LOADING)
-    expect(isLoading).toBe(false)
+    const { result } = renderHook(() => useLoadingStates(['b']))
+    expect(result.current).toBe(false)
   })
 
-  it('accepts string or string[] for keys', () => {
-    getState().setApiState('x', { status: FetchStatus.LOADING })
-    const { apiStates } = getState()
+  it('accepts a single string key', () => {
+    useApiStore.getState().setApiState('x', { status: FetchStatus.LOADING })
 
-    // single string wrapped to array
-    const singleKey = 'x'
-    const keyArray = Array.isArray(singleKey) ? singleKey : [singleKey]
-    const isLoading = keyArray.some(key => apiStates[key]?.status === FetchStatus.LOADING)
-    expect(isLoading).toBe(true)
+    const { result } = renderHook(() => useLoadingStates('x'))
+    expect(result.current).toBe(true)
+  })
 
-    // array of strings
-    const multiKeys = ['x', 'y']
-    const isLoadingMulti = multiKeys.some(key => apiStates[key]?.status === FetchStatus.LOADING)
-    expect(isLoadingMulti).toBe(true)
+  it('reacts to state changes', async () => {
+    const { result } = renderHook(() => useLoadingStates('users'))
+    expect(result.current).toBe(false)
+
+    act(() => {
+      useApiStore.getState().setApiState('users', { status: FetchStatus.LOADING })
+    })
+    await waitFor(() => expect(result.current).toBe(true))
+
+    act(() => {
+      useApiStore.getState().setApiState('users', { status: FetchStatus.SUCCESS })
+    })
+    await waitFor(() => expect(result.current).toBe(false))
   })
 })
 
-// ── useApiHandler (tested via store state) ───────────────────
+// ── useApiHandler ────────────────────────────────────────────
 
-describe('useApiHandler logic', () => {
+describe('useApiHandler', () => {
+  it('returns isIdle=true for an unknown key', () => {
+    const { result } = renderHook(() => useApiHandler<string>('users'))
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.isError).toBe(false)
+    expect(result.current.isSuccess).toBe(false)
+    expect(result.current.data).toBeNull()
+    expect(result.current.error).toBeNull()
+  })
+
   it('returns correct boolean flags based on status', () => {
-    getState().setApiState('users', { status: FetchStatus.LOADING })
-    let state = getState().apiStates['users']
-    expect(state.status === FetchStatus.LOADING).toBe(true)
-    expect(state.status === FetchStatus.ERROR).toBe(false)
-    expect(state.status === FetchStatus.SUCCESS).toBe(false)
-
-    getState().setApiState('users', { status: FetchStatus.SUCCESS })
-    state = getState().apiStates['users']
-    expect(state.status === FetchStatus.SUCCESS).toBe(true)
-    expect(state.status === FetchStatus.LOADING).toBe(false)
-
-    getState().setApiState('users', { status: FetchStatus.ERROR })
-    state = getState().apiStates['users']
-    expect(state.status === FetchStatus.ERROR).toBe(true)
-    expect(state.status === FetchStatus.SUCCESS).toBe(false)
+    useApiStore.getState().setApiState('users', { status: FetchStatus.LOADING })
+    const { result } = renderHook(() => useApiHandler<string>('users'))
+    expect(result.current.isLoading).toBe(true)
+    expect(result.current.isIdle).toBe(false)
   })
 
-  it('returns data and error from state', async () => {
-    const apiCall = () => Promise.resolve({ data: { id: 1 } })
-    await getState().handleApi('users', apiCall)
-    const state = getState().apiStates['users']
-    expect(state.data).toEqual({ id: 1 })
-    expect(state.error).toBeNull()
+  it('handleApi triggers loading then success', async () => {
+    const { result } = renderHook(() => useApiHandler<{ id: number }>('users'))
 
-    const failCall = () => Promise.reject(new Error('oops'))
-    await getState().handleApi('fail', failCall)
-    const errorState = getState().apiStates['fail']
-    expect(errorState.data).toBeNull()
-    expect(errorState.error).toBeDefined()
-    expect(errorState.error!.message).toBe('oops')
+    await act(async () => {
+      await result.current.handleApi(() =>
+        Promise.resolve({ data: { id: 42 } })
+      )
+    })
+
+    expect(result.current.isSuccess).toBe(true)
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.data).toEqual({ id: 42 })
+    expect(result.current.error).toBeNull()
   })
 
-  it('handleApi delegates to store handleApi with bound key', async () => {
-    const handleApiSpy = vi.spyOn(getState(), 'handleApi')
-    const apiCall = () => Promise.resolve({ data: 'result' })
+  it('handleApi triggers loading then error', async () => {
+    const { result } = renderHook(() => useApiHandler<string>('users'))
 
-    // Simulating what useApiHandler does: binding key
-    const key = 'users'
-    const boundHandleApi = (
-      call: () => Promise<{ data: string }>,
-      options?: ApiCallOptions
-    ) => getState().handleApi(key, call, options)
+    await act(async () => {
+      await result.current.handleApi(() => Promise.reject(new Error('oops')))
+    })
 
-    await boundHandleApi(apiCall)
-    expect(handleApiSpy).toHaveBeenCalledWith('users', apiCall, undefined)
-    handleApiSpy.mockRestore()
+    expect(result.current.isError).toBe(true)
+    expect(result.current.data).toBeNull()
+    expect(result.current.error).toBeDefined()
+    expect(result.current.error!.message).toBe('oops')
   })
 
-  it('resetApi delegates to store resetApiState', () => {
-    getState().setApiState('users', { status: FetchStatus.SUCCESS, data: 'hello' })
-    expect(getState().apiStates['users']).toBeDefined()
+  it('resetApi clears state back to idle', async () => {
+    const { result } = renderHook(() => useApiHandler<string>('users'))
 
-    // Simulating what useApiHandler does
-    const key = 'users'
-    getState().resetApiState(key)
+    await act(async () => {
+      await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+    })
+    expect(result.current.isSuccess).toBe(true)
 
-    expect(getState().apiStates['users']).toBeUndefined()
+    act(() => {
+      result.current.resetApi()
+    })
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.data).toBeNull()
+  })
+
+  it('only re-renders when own key changes', async () => {
+    const renderCount = vi.fn()
+    const { result } = renderHook(() => {
+      renderCount()
+      return useApiHandler<string>('users')
+    })
+
+    const initialRenderCount = renderCount.mock.calls.length
+
+    // Changing a *different* key should not cause re-render
+    act(() => {
+      useApiStore.getState().setApiState('posts', { status: FetchStatus.LOADING })
+    })
+
+    // Give React a tick to flush
+    await waitFor(() => {
+      // renderCount should not have increased
+      expect(renderCount.mock.calls.length).toBe(initialRenderCount)
+    })
+
+    // Changing our key should cause re-render
+    act(() => {
+      useApiStore.getState().setApiState('users', { status: FetchStatus.LOADING })
+    })
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(true)
+    })
   })
 })

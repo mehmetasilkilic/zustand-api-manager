@@ -1,3 +1,1 @@
-import { enableMapSet } from 'immer'
-
-enableMapSet()
+// Test setup — no special configuration needed
