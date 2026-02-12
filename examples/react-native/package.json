@@ -1,0 +1,25 @@
+{
+  "name": "zustand-api-manager-example-react-native",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios"
+  },
+  "dependencies": {
+    "expo": "^52.0.0",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.0",
+    "zustand-api-manager": "file:../.."
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.28",
+    "@types/react-native": "^0.76.0",
+    "typescript": "^5.9.3"
+  }
+}
+
+
