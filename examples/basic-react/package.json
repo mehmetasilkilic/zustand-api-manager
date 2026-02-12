@@ -1,0 +1,24 @@
+{
+  "name": "zustand-api-manager-example-basic-react",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand-api-manager": "file:../.."
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react-swc": "^4.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.0"
+  }
+}
+
+

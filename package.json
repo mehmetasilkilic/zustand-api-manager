@@ -1,6 +1,6 @@
 {
   "name": "zustand-api-manager",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A Zustand plugin for managing API states",
   "main": "lib/cjs/index.js",
   "module": "lib/esm/index.js",
