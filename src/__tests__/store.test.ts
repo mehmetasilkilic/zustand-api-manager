@@ -24,6 +24,7 @@ describe('setApiState', () => {
     expect(state.status).toBe(FetchStatus.LOADING)
     expect(state.data).toBeNull()
     expect(state.error).toBeNull()
+    expect(state.fetchedAt).toBeNull()
   })
 
   it('merges partial state into an existing key', () => {
@@ -96,6 +97,22 @@ describe('handleApi — success path', () => {
     expect(onSuccess).toHaveBeenCalledOnce()
     expect(onSuccess).toHaveBeenCalledWith('ok')
   })
+
+  it('returns the response data on success', async () => {
+    const apiCall = () => Promise.resolve({ data: { id: 1 } })
+    const result = await getState().handleApi('users', apiCall)
+    expect(result).toEqual({ id: 1 })
+  })
+
+  it('sets fetchedAt timestamp on success', async () => {
+    const before = Date.now()
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    const after = Date.now()
+    const fetchedAt = getState().apiStates['users'].fetchedAt!
+    expect(fetchedAt).toBeGreaterThanOrEqual(before)
+    expect(fetchedAt).toBeLessThanOrEqual(after)
+  })
 })
 
 // ── handleApi — error path ───────────────────────────────────
@@ -156,6 +173,12 @@ describe('handleApi — error path', () => {
     expect(handler).toHaveBeenCalledOnce()
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom' }), 'users')
   })
+
+  it('returns undefined on error', async () => {
+    const apiCall = () => Promise.reject(new Error('fail'))
+    const result = await getState().handleApi('users', apiCall)
+    expect(result).toBeUndefined()
+  })
 })
 
 // ── handleApi — persistence ──────────────────────────────────
@@ -200,6 +223,35 @@ describe('handleApi — abort', () => {
     await getState().handleApi('users', apiCall, { signal: controller.signal, onSuccess })
     expect(onSuccess).not.toHaveBeenCalled()
     expect(getState().apiStates['users'].error!.code).toBe('ABORT_ERR')
+  })
+
+  it('aborts during retry backoff sleep', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    let callCount = 0
+    const apiCall = () => {
+      callCount++
+      return Promise.reject(new Error('fail'))
+    }
+
+    const promise = getState().handleApi('users', apiCall, {
+      retry: 3,
+      signal: controller.signal
+    })
+
+    // Let the first attempt fail and start the backoff
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Abort during the backoff sleep
+    controller.abort()
+    await vi.runAllTimersAsync()
+    await promise
+
+    // Should have only attempted once before abort killed the sleep
+    expect(callCount).toBe(1)
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['users'].error!.code).toBe('ABORT_ERR')
+    vi.useRealTimers()
   })
 })
 
@@ -293,6 +345,149 @@ describe('handleApi — race condition', () => {
 
     expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
     expect(getState().apiStates['users'].error).toBeNull()
+  })
+
+  it('returns undefined for stale requests', async () => {
+    let resolveFirst: (value: { data: string }) => void
+    const firstCall = () =>
+      new Promise<{ data: string }>(resolve => {
+        resolveFirst = resolve
+      })
+    const secondCall = () => Promise.resolve({ data: 'second' })
+
+    const firstPromise = getState().handleApi('users', firstCall)
+    const secondResult = await getState().handleApi('users', secondCall)
+
+    expect(secondResult).toBe('second')
+
+    resolveFirst!({ data: 'first' })
+    const firstResult = await firstPromise
+
+    expect(firstResult).toBeUndefined()
+  })
+})
+
+// ── handleApi — staleTime / cache ────────────────────────────
+
+describe('handleApi — staleTime', () => {
+  it('skips fetch and returns cached data when within staleTime', async () => {
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'fresh' }))
+
+    // First call populates the cache
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Second call should be served from cache
+    const result = await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+    expect(result).toBe('fresh')
+  })
+
+  it('refetches when staleTime has elapsed', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+
+    await getState().handleApi('users', apiCall, { staleTime: 1000 })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Advance time past staleTime
+    vi.advanceTimersByTime(1500)
+
+    await getState().handleApi('users', apiCall, { staleTime: 1000 })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
+
+  it('does not cache when staleTime is not provided', async () => {
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('users', apiCall)
+    expect(apiCall).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── handleApi — optimistic updates ──────────────────────────
+
+describe('handleApi — optimistic updates', () => {
+  it('sets optimistic data immediately in LOADING state', async () => {
+    let resolveApiCall: (value: { data: string }) => void
+    const apiCall = () =>
+      new Promise<{ data: string }>(resolve => {
+        resolveApiCall = resolve
+      })
+
+    const promise = getState().handleApi('users', apiCall, {
+      optimisticData: 'optimistic'
+    })
+
+    // Should be LOADING with optimistic data
+    const state = getState().apiStates['users']
+    expect(state.status).toBe(FetchStatus.LOADING)
+    expect(state.data).toBe('optimistic')
+
+    resolveApiCall!({ data: 'real' })
+    await promise
+
+    // Should now have the real data
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['users'].data).toBe('real')
+  })
+
+  it('rolls back optimistic data on error', async () => {
+    // Set initial data
+    getState().setApiState('users', {
+      status: FetchStatus.SUCCESS,
+      data: 'original'
+    })
+
+    const apiCall = () => Promise.reject(new Error('fail'))
+    await getState().handleApi('users', apiCall, {
+      optimisticData: 'optimistic'
+    })
+
+    // Should have rolled back to original data
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['users'].data).toBe('original')
+  })
+
+  it('rolls back to null when there was no previous data', async () => {
+    const apiCall = () => Promise.reject(new Error('fail'))
+    await getState().handleApi('users', apiCall, {
+      optimisticData: 'optimistic'
+    })
+
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['users'].data).toBeNull()
+  })
+})
+
+// ── handleApi — fresh errorHandlers ─────────────────────────
+
+describe('handleApi — fresh errorHandlers', () => {
+  it('calls error handlers added after handleApi started', async () => {
+    let rejectApiCall: (reason: Error) => void
+    const apiCall = () =>
+      new Promise<{ data: string }>((_, reject) => {
+        rejectApiCall = reject
+      })
+
+    const promise = getState().handleApi('users', apiCall)
+
+    // Add handler AFTER the request started
+    const handler = vi.fn()
+    getState().addErrorHandler(handler)
+
+    rejectApiCall!(new Error('late error'))
+    await promise
+
+    // Handler added after handleApi started should still be called
+    expect(handler).toHaveBeenCalledOnce()
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'late error' }),
+      'users'
+    )
   })
 })
 

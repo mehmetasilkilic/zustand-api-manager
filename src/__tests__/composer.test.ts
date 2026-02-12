@@ -29,19 +29,21 @@ describe('createApiComposer', () => {
     expect(result.current.isError).toBe(false)
     expect(result.current.data).toBeNull()
     expect(result.current.error).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.IDLE)
+    expect(result.current.fetchedAt).toBeNull()
   })
 
   it('handleApi triggers loading then success with typed data (void params)', async () => {
     const { result } = renderHook(() => useApi('getUsers'))
 
     await act(async () => {
-      await result.current.handleApi(() =>
-        Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
-      )
+      await result.current.handleApi(() => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
     })
 
     expect(result.current.isSuccess).toBe(true)
     expect(result.current.data).toEqual([{ id: 1, name: 'Alice' }])
+    expect(result.current.status).toBe(FetchStatus.SUCCESS)
+    expect(result.current.fetchedAt).not.toBeNull()
   })
 
   it('handleApi triggers error state', async () => {
@@ -54,6 +56,7 @@ describe('createApiComposer', () => {
     expect(result.current.isError).toBe(true)
     expect(result.current.error!.message).toBe('not found')
     expect(result.current.data).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.ERROR)
   })
 
   it('reflects external state changes', () => {
@@ -68,6 +71,22 @@ describe('createApiComposer', () => {
 
     expect(result.current.isSuccess).toBe(true)
     expect(result.current.data).toEqual([{ id: 2, name: 'Bob' }])
+  })
+
+  it('resetApi clears state back to idle', async () => {
+    const { result } = renderHook(() => useApi('getUsers'))
+
+    await act(async () => {
+      await result.current.handleApi(() => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
+    })
+    expect(result.current.isSuccess).toBe(true)
+
+    act(() => {
+      result.current.resetApi()
+    })
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.data).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.IDLE)
   })
 })
 
@@ -89,9 +108,7 @@ describe('createApiComposer — params passthrough', () => {
 
   it('passes undefined params for void endpoints', async () => {
     const { result } = renderHook(() => useApi('getUsers'))
-    const apiCall = vi.fn((_params: void) =>
-      Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
-    )
+    const apiCall = vi.fn((_params: void) => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
 
     await act(async () => {
       await result.current.handleApi(apiCall)

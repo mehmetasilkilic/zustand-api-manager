@@ -2,12 +2,13 @@ import { ApiState, FetchStatus } from './types'
 
 /**
  * The default state for a newly tracked API endpoint.
- * Status is `IDLE`, with no data and no error.
+ * Status is `IDLE`, with no data, no error, and no fetch timestamp.
  */
 export const initialApiState: ApiState<unknown> = {
   status: FetchStatus.IDLE,
   data: null,
-  error: null
+  error: null,
+  fetchedAt: null
 }
 
 /**

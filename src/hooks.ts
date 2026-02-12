@@ -1,5 +1,5 @@
 import { useApiStore } from './store'
-import { ApiCallOptions, ApiStore, FetchStatus } from './types'
+import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
@@ -45,7 +45,7 @@ export const useLoadingStates = (
  * @typeParam T - The expected response data type.
  * @param key - The unique identifier for the API endpoint.
  * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
- * @returns An object containing the current state (`data`, `error`, status booleans),
+ * @returns An {@link ApiHandlerResult} containing the current state (`data`, `error`, status booleans),
  *          a `handleApi` function to trigger the call, and a `resetApi` function to clear the state.
  *
  * @example
@@ -68,21 +68,23 @@ export const useLoadingStates = (
 export const useApiHandler = <T>(
   key: string,
   store?: UseBoundStore<StoreApi<ApiStore>>
-) => {
+): ApiHandlerResult<T> => {
   const useStore = store ?? useApiStore
   const apiState = useStore(state => state.apiStates[key])
   const handleApi = useStore(state => state.handleApi)
   const resetApiState = useStore(state => state.resetApiState)
 
   return {
+    status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
     isIdle: !apiState || apiState.status === FetchStatus.IDLE,
     isLoading: apiState?.status === FetchStatus.LOADING,
     isError: apiState?.status === FetchStatus.ERROR,
     isSuccess: apiState?.status === FetchStatus.SUCCESS,
     data: (apiState?.data as T | undefined) ?? null,
     error: apiState?.error ?? null,
-    handleApi: (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions) =>
-      handleApi(key, apiCall, options),
+    fetchedAt: apiState?.fetchedAt ?? null,
+    handleApi: (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
+      handleApi<T>(key, apiCall, options),
     resetApi: () => resetApiState(key)
   }
 }

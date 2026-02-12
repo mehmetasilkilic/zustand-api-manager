@@ -13,7 +13,20 @@ import {
 } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+/** Abort-aware sleep that rejects early when the signal fires. */
+const abortableSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Aborted'))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new Error('Aborted'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 
 /** SSR-safe fallback that returns a no-op storage when `localStorage` is unavailable. */
 const getSafeStorage = (): StateStorage => {
@@ -33,7 +46,12 @@ const activeRequests: Record<string, number> = {}
  * Creates a new Zustand store instance for managing API states.
  *
  * @param config - Optional configuration for storage key and custom storage.
- * @returns An object containing the store hook and convenience hooks/factories.
+ * @returns An object containing the store hook (`useStore`).
+ *
+ * @remarks
+ * For a version that returns pre-bound convenience hooks, import {@link createApiStore}
+ * from the package root (`zustand-api-manager`), which wraps this and also provides
+ * `useApiHandler`, `useLoadingStates`, and `createApiComposer` bound to the store.
  *
  * @example
  * ```ts
@@ -69,35 +87,72 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             }
           }),
 
-        resetApiState: (key: string) =>
+        resetApiState: (key: string) => {
+          // Clean up race-condition counter to prevent memory leak
+          delete activeRequests[key]
           set(draft => {
             delete draft.apiStates[key]
             delete draft.persistentKeys[key]
-          }),
+          })
+        },
 
         handleApi: async <T>(
           key: string,
           apiCall: () => Promise<{ data: T }>,
-          options: ApiCallOptions = {}
-        ) => {
-          const { setApiState, errorHandlers, middleware } = get()
-          const { retry = 0 } = options
+          options: ApiCallOptions<T> = {}
+        ): Promise<T | undefined> => {
+          const { setApiState } = get()
+          const { retry = 0, staleTime, optimisticData } = options
+
+          // Cache / staleTime: skip fetch if data is fresh enough
+          if (staleTime != null && staleTime > 0) {
+            const existing = get().apiStates[key]
+            if (
+              existing?.status === FetchStatus.SUCCESS &&
+              existing.fetchedAt != null &&
+              Date.now() - existing.fetchedAt < staleTime
+            ) {
+              return existing.data as T
+            }
+          }
 
           // Race condition protection: increment the counter for this key
           const requestId = (activeRequests[key] = (activeRequests[key] ?? 0) + 1)
-
           const isStale = () => activeRequests[key] !== requestId
+
+          // Save previous data for optimistic rollback
+          const previousData = get().apiStates[key]?.data ?? null
+
+          // Optimistic update: set data immediately while request is in-flight
+          if (optimisticData !== undefined) {
+            setApiState<T>(
+              key,
+              { status: FetchStatus.LOADING, data: optimisticData },
+              options.persist
+            )
+          }
 
           const handleError = (error: ApiError) => {
             if (isStale()) return
-            setApiState<T>(key, { status: FetchStatus.ERROR, error, data: null }, options.persist)
-            errorHandlers.forEach(handler => handler(error, key))
+            // Roll back to previous data when optimistic update was used
+            const rollbackData = optimisticData !== undefined ? previousData : null
+            setApiState<T>(
+              key,
+              { status: FetchStatus.ERROR, error, data: rollbackData as T | null },
+              options.persist
+            )
+            // Read errorHandlers fresh to avoid stale closure references
+            get().errorHandlers.forEach(handler => handler(error, key))
             options.onError?.(error)
           }
 
           const baseHandler: ApiMiddlewareHandler = async (key, apiCall, options) => {
             if (isStale()) return
-            setApiState(key, { status: FetchStatus.LOADING }, options.persist)
+
+            // Only set LOADING if we didn't already set it via optimistic update
+            if (optimisticData === undefined) {
+              setApiState(key, { status: FetchStatus.LOADING }, options.persist)
+            }
 
             let lastError: ApiError | undefined
             const maxAttempts = (options.retry ?? 0) + 1
@@ -115,7 +170,12 @@ export function createApiStore(config: ApiStoreConfig = {}) {
                 if (isStale()) return
                 setApiState(
                   key,
-                  { status: FetchStatus.SUCCESS, data: response.data, error: null },
+                  {
+                    status: FetchStatus.SUCCESS,
+                    data: response.data,
+                    error: null,
+                    fetchedAt: Date.now()
+                  },
                   options.persist
                 )
                 options.onSuccess?.(response.data)
@@ -141,7 +201,15 @@ export function createApiStore(config: ApiStoreConfig = {}) {
                 lastError = apiError
 
                 if (attempt < maxAttempts - 1) {
-                  await sleep(Math.min(1000 * 2 ** attempt, 10000))
+                  try {
+                    await abortableSleep(Math.min(1000 * 2 ** attempt, 10000), options.signal)
+                  } catch {
+                    // Sleep was aborted — treat as abort error
+                    const abortError: ApiError = new Error('Aborted')
+                    abortError.code = 'ABORT_ERR'
+                    handleError(abortError)
+                    return
+                  }
                 }
               }
             }
@@ -151,12 +219,21 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             }
           }
 
-          const composedHandler = middleware.reduce<ApiMiddlewareHandler>(
+          // Read middleware fresh at call time
+          const composedHandler = get().middleware.reduce<ApiMiddlewareHandler>(
             (next, mid) => mid(next),
             baseHandler
           )
 
           await composedHandler(key, apiCall, { ...options, retry })
+
+          // Return the data if the request succeeded and wasn't superseded
+          if (isStale()) return undefined
+          const finalState = get().apiStates[key]
+          if (finalState?.status === FetchStatus.SUCCESS) {
+            return finalState.data as T
+          }
+          return undefined
         },
 
         addMiddleware: middleware => {

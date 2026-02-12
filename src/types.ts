@@ -31,7 +31,8 @@ export type FetchStatus = (typeof FetchStatus)[keyof typeof FetchStatus]
  * const userState: ApiState<User> = {
  *   status: FetchStatus.SUCCESS,
  *   data: { id: 1, name: 'John' },
- *   error: null
+ *   error: null,
+ *   fetchedAt: 1700000000000
  * }
  * ```
  */
@@ -42,6 +43,8 @@ export interface ApiState<T> {
   data: T | null
   /** The error object if the request failed, otherwise `null`. */
   error: ApiError | null
+  /** Timestamp (ms since epoch) of the last successful fetch, or `null` if never fetched. */
+  fetchedAt: number | null
 }
 
 /**
@@ -58,6 +61,8 @@ export interface ApiError extends Error {
 /**
  * Configuration options passed to `handleApi` to customize the behavior of an API call.
  *
+ * @typeParam T - The expected response data type (used for typed `onSuccess` and `optimisticData`).
+ *
  * @example
  * ```ts
  * const controller = new AbortController()
@@ -65,15 +70,16 @@ export interface ApiError extends Error {
  * handleApi('users', fetchUsers, {
  *   persist: true,
  *   retry: 3,
+ *   staleTime: 30_000,
  *   signal: controller.signal,
  *   onSuccess: (data) => console.log('Loaded!', data),
  *   onError: (error) => console.error('Failed!', error)
  * })
  * ```
  */
-export interface ApiCallOptions {
-  /** Callback invoked when the API call succeeds. Receives the response data. */
-  onSuccess?: (data: unknown) => void
+export interface ApiCallOptions<T = unknown> {
+  /** Callback invoked when the API call succeeds. Receives the typed response data. */
+  onSuccess?: (data: T) => void
   /** Callback invoked when the API call fails (after all retries are exhausted). Receives the error. */
   onError?: (error: ApiError) => void
   /** If `true`, the resulting state will be persisted to `localStorage` and survive page reloads. */
@@ -82,6 +88,17 @@ export interface ApiCallOptions {
   signal?: AbortSignal
   /** Number of retry attempts on failure. Uses exponential backoff (max 10s). Defaults to `0` (no retries). */
   retry?: number
+  /**
+   * If the data was successfully fetched within this many milliseconds, skip the request
+   * and return the cached data immediately. Useful for avoiding redundant refetches.
+   */
+  staleTime?: number
+  /**
+   * Data to set optimistically before the request completes.
+   * The data will be visible immediately while the request is in-flight.
+   * On error, the state is rolled back to the previous data.
+   */
+  optimisticData?: T
 }
 
 /**
@@ -113,7 +130,7 @@ export interface ApiEndpoint<P, R> {
 export type ApiMiddlewareHandler = <T>(
   key: string,
   apiCall: () => Promise<{ data: T }>,
-  options: ApiCallOptions
+  options: ApiCallOptions<T>
 ) => Promise<void>
 
 /**
@@ -172,16 +189,20 @@ export interface ApiStore {
    * handles retries with exponential backoff, supports abort signals, runs through
    * the middleware chain, and updates the state to `SUCCESS` or `ERROR`.
    *
+   * Returns the response data on success, or `undefined` if the request was
+   * aborted, stale (superseded by a newer request), or failed.
+   *
    * @typeParam T - The expected response data type.
    * @param key - The unique identifier for the API endpoint.
    * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
+   * @returns The response data on success, or `undefined` otherwise.
    */
   handleApi: <T>(
     key: string,
     apiCall: () => Promise<{ data: T }>,
-    options?: ApiCallOptions
-  ) => Promise<void>
+    options?: ApiCallOptions<T>
+  ) => Promise<T | undefined>
 
   /**
    * Register a middleware function that will be applied to all subsequent `handleApi` calls.
@@ -216,15 +237,16 @@ export interface ApiStoreConfig {
 }
 
 /**
- * The return type of the hook created by {@link createApiComposer}.
- * Provides reactive access to the API state along with a type-safe `handleApi` function.
+ * The return type of {@link useApiHandler}.
+ * Provides reactive access to the API state along with functions to trigger and reset.
  *
  * @typeParam T - The response data type.
- * @typeParam P - The request parameters type. Defaults to `void` (no params).
  */
-export interface ApiComposerResult<T, P = void> {
+export interface ApiHandlerResult<T> {
   /** The response data, or `null` if not yet loaded or on error. */
   data: T | null
+  /** The raw lifecycle status of the API request. */
+  status: FetchStatus
   /** `true` if no request has been made yet for this key. */
   isIdle: boolean
   /** `true` if a request is currently in progress. */
@@ -235,6 +257,47 @@ export interface ApiComposerResult<T, P = void> {
   isError: boolean
   /** The error from the last failed request, or `null`. */
   error: ApiError | null
+  /** Timestamp (ms since epoch) of the last successful fetch, or `null`. */
+  fetchedAt: number | null
+  /**
+   * Trigger an API call for this endpoint.
+   *
+   * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
+   * @param options - Optional configuration for persistence, retries, abort, and callbacks.
+   * @returns The response data on success, or `undefined` otherwise.
+   */
+  handleApi: (
+    apiCall: () => Promise<{ data: T }>,
+    options?: ApiCallOptions<T>
+  ) => Promise<T | undefined>
+  /** Reset this endpoint's state back to idle and remove it from persistence. */
+  resetApi: () => void
+}
+
+/**
+ * The return type of the hook created by {@link createApiComposer}.
+ * Provides reactive access to the API state along with a type-safe `handleApi` function.
+ *
+ * @typeParam T - The response data type.
+ * @typeParam P - The request parameters type. Defaults to `void` (no params).
+ */
+export interface ApiComposerResult<T, P = void> {
+  /** The response data, or `null` if not yet loaded or on error. */
+  data: T | null
+  /** The raw lifecycle status of the API request. */
+  status: FetchStatus
+  /** `true` if no request has been made yet for this key. */
+  isIdle: boolean
+  /** `true` if a request is currently in progress. */
+  isLoading: boolean
+  /** `true` if the last request completed successfully. */
+  isSuccess: boolean
+  /** `true` if the last request failed. */
+  isError: boolean
+  /** The error from the last failed request, or `null`. */
+  error: ApiError | null
+  /** Timestamp (ms since epoch) of the last successful fetch, or `null`. */
+  fetchedAt: number | null
   /**
    * Trigger an API call for this endpoint. The `apiCall` function receives
    * the typed parameters and must return `{ data: T }`.
@@ -242,10 +305,13 @@ export interface ApiComposerResult<T, P = void> {
    * @param params - The typed parameters for the API call.
    * @param apiCall - A function that accepts typed params and returns the response.
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
+   * @returns The response data on success, or `undefined` otherwise.
    */
   handleApi: (
     ...args: P extends void
-      ? [apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions]
-      : [params: P, apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions]
-  ) => Promise<void>
+      ? [apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions<T>]
+      : [params: P, apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions<T>]
+  ) => Promise<T | undefined>
+  /** Reset this endpoint's state back to idle and remove it from persistence. */
+  resetApi: () => void
 }

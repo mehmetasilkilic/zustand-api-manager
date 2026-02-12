@@ -82,6 +82,8 @@ describe('useApiHandler', () => {
     expect(result.current.isSuccess).toBe(false)
     expect(result.current.data).toBeNull()
     expect(result.current.error).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.IDLE)
+    expect(result.current.fetchedAt).toBeNull()
   })
 
   it('returns correct boolean flags based on status', () => {
@@ -89,21 +91,22 @@ describe('useApiHandler', () => {
     const { result } = renderHook(() => useApiHandler<string>('users'))
     expect(result.current.isLoading).toBe(true)
     expect(result.current.isIdle).toBe(false)
+    expect(result.current.status).toBe(FetchStatus.LOADING)
   })
 
   it('handleApi triggers loading then success', async () => {
     const { result } = renderHook(() => useApiHandler<{ id: number }>('users'))
 
     await act(async () => {
-      await result.current.handleApi(() =>
-        Promise.resolve({ data: { id: 42 } })
-      )
+      await result.current.handleApi(() => Promise.resolve({ data: { id: 42 } }))
     })
 
     expect(result.current.isSuccess).toBe(true)
     expect(result.current.isLoading).toBe(false)
     expect(result.current.data).toEqual({ id: 42 })
     expect(result.current.error).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.SUCCESS)
+    expect(result.current.fetchedAt).not.toBeNull()
   })
 
   it('handleApi triggers loading then error', async () => {
@@ -117,6 +120,18 @@ describe('useApiHandler', () => {
     expect(result.current.data).toBeNull()
     expect(result.current.error).toBeDefined()
     expect(result.current.error!.message).toBe('oops')
+    expect(result.current.status).toBe(FetchStatus.ERROR)
+  })
+
+  it('handleApi returns data on success', async () => {
+    const { result } = renderHook(() => useApiHandler<string>('users'))
+
+    let returnedData: string | undefined
+    await act(async () => {
+      returnedData = await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+    })
+
+    expect(returnedData).toBe('hello')
   })
 
   it('resetApi clears state back to idle', async () => {
@@ -132,6 +147,7 @@ describe('useApiHandler', () => {
     })
     expect(result.current.isIdle).toBe(true)
     expect(result.current.data).toBeNull()
+    expect(result.current.status).toBe(FetchStatus.IDLE)
   })
 
   it('only re-renders when own key changes', async () => {
