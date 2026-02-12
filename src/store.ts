@@ -187,6 +187,29 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             }
           }),
 
+        invalidateApis: (keys: string[]) =>
+          set(draft => {
+            for (const key of keys) {
+              if (draft.apiStates[key]) {
+                draft.apiStates[key].fetchedAt = null
+              }
+            }
+          }),
+
+        resetApiStates: (keys: string[]) => {
+          for (const key of keys) {
+            delete activeRequests[key]
+            pendingRequests.delete(key)
+            releaseKeyOwnership(key)
+          }
+          set(draft => {
+            for (const key of keys) {
+              delete draft.apiStates[key]
+              delete draft.persistentKeys[key]
+            }
+          })
+        },
+
         handleApi: <T>(
           key: string,
           apiCall: () => Promise<{ data: T }>,

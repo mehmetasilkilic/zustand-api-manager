@@ -892,6 +892,105 @@ describe('invalidateApi', () => {
   })
 })
 
+// ── invalidateApis (batch) ───────────────────────────────────
+
+describe('invalidateApis', () => {
+  it('clears fetchedAt for multiple keys in a single update', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+    expect(getState().apiStates['users'].fetchedAt).not.toBeNull()
+    expect(getState().apiStates['posts'].fetchedAt).not.toBeNull()
+
+    getState().invalidateApis(['users', 'posts'])
+    expect(getState().apiStates['users'].fetchedAt).toBeNull()
+    expect(getState().apiStates['posts'].fetchedAt).toBeNull()
+  })
+
+  it('preserves data and status for all keys', async () => {
+    const apiCall = () => Promise.resolve({ data: 'mydata' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+
+    getState().invalidateApis(['users', 'posts'])
+    expect(getState().apiStates['users'].data).toBe('mydata')
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['posts'].data).toBe('mydata')
+    expect(getState().apiStates['posts'].status).toBe(FetchStatus.SUCCESS)
+  })
+
+  it('skips unknown keys without error', () => {
+    getState().invalidateApis(['unknown1', 'unknown2'])
+    expect(getState().apiStates['unknown1']).toBeUndefined()
+    expect(getState().apiStates['unknown2']).toBeUndefined()
+  })
+
+  it('causes staleTime to refetch after batch invalidation', async () => {
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    // Both served from cache
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    // Batch invalidate
+    getState().invalidateApis(['users', 'posts'])
+
+    // Both refetch
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(4)
+  })
+})
+
+// ── resetApiStates (batch) ───────────────────────────────────
+
+describe('resetApiStates', () => {
+  it('deletes state for multiple keys in a single update', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+
+    getState().resetApiStates(['users', 'posts'])
+    expect(getState().apiStates['users']).toBeUndefined()
+    expect(getState().apiStates['posts']).toBeUndefined()
+  })
+
+  it('removes all keys from persistentKeys', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall, { persist: true })
+    await getState().handleApi('posts', apiCall, { persist: true })
+    expect(getState().persistentKeys['users']).toBe(true)
+    expect(getState().persistentKeys['posts']).toBe(true)
+
+    getState().resetApiStates(['users', 'posts'])
+    expect(getState().persistentKeys['users']).toBeUndefined()
+    expect(getState().persistentKeys['posts']).toBeUndefined()
+  })
+
+  it('leaves other keys untouched', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+    await getState().handleApi('comments', apiCall)
+
+    getState().resetApiStates(['users', 'posts'])
+    expect(getState().apiStates['users']).toBeUndefined()
+    expect(getState().apiStates['posts']).toBeUndefined()
+    expect(getState().apiStates['comments']).toBeDefined()
+    expect(getState().apiStates['comments'].data).toBe('ok')
+  })
+
+  it('is a no-op for unknown keys', () => {
+    getState().resetApiStates(['unknown1', 'unknown2'])
+    expect(getState().apiStates['unknown1']).toBeUndefined()
+  })
+})
+
 // ── startPolling ─────────────────────────────────────────────
 
 describe('startPolling', () => {

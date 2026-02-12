@@ -19,6 +19,7 @@ A powerful and flexible API state management solution built on top of Zustand.
 - [Abort & Retry](#abort--retry)
 - [Caching with staleTime](#caching-with-staletime)
 - [Cache Invalidation](#cache-invalidation)
+- [Batch Operations](#batch-operations)
 - [Optimistic Updates](#optimistic-updates)
 - [Request Timeout](#request-timeout)
 - [Request Deduplication](#request-deduplication)
@@ -49,7 +50,8 @@ npm install zustand-api-manager zustand immer
 - Automatic retry with exponential back-off, customizable `shouldRetry` and `backoff` strategies
 - Race condition protection (stale responses are automatically discarded)
 - Built-in caching via `staleTime` — skip refetches when data is fresh
-- Cache invalidation via `invalidateApi` — mark data as stale without removing it
+- Cache invalidation via `invalidateApi` / `invalidateApis` — mark data as stale without removing it
+- Batch operations via `invalidateApis` and `resetApiStates` — update multiple keys in a single state update
 - Optimistic updates with automatic rollback on error
 - Request timeout with `TIMEOUT` error code
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
@@ -199,9 +201,11 @@ function UserList() {
 
 The default singleton store for managing API states. Provides the following methods:
 
-- `setApiState(key, state, persist?)` — Update the state for a specific API key
+- `setApiState(key, state, persist?)` — Update the state for a specific API key. `persist` is three-state: `true` marks for persistence, `false` removes persistence, `undefined` (omitted) leaves persistence unchanged
 - `resetApiState(key)` — Reset the state for a specific API key
 - `invalidateApi(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
+- `invalidateApis(keys)` — Batch-invalidate multiple keys in a single state update
+- `resetApiStates(keys)` — Batch-reset multiple keys in a single state update
 - `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
@@ -474,6 +478,24 @@ You can also call `invalidateApi` directly on the store:
 useApiStore.getState().invalidateApi("user");
 ```
 
+To invalidate multiple keys at once, see [Batch Operations](#batch-operations).
+
+## Batch Operations
+
+Use `invalidateApis` and `resetApiStates` to operate on multiple keys in a **single state update**, avoiding unnecessary intermediate re-renders:
+
+```typescript
+const store = useApiStore.getState();
+
+// Invalidate multiple caches at once (e.g. after a mutation that affects several endpoints)
+store.invalidateApis(["getUser", "getUserPosts", "getUserSettings"]);
+
+// Reset multiple keys at once (e.g. clearing all user-related state on logout)
+store.resetApiStates(["getUser", "getUserPosts", "getUserSettings"]);
+```
+
+Both methods are also available on custom store instances created with `createApiStore`.
+
 ## Optimistic Updates
 
 Use `optimisticData` to show data immediately while a request is in-flight. If the request fails, the state automatically rolls back to the previous data:
@@ -618,6 +640,8 @@ function MyComponent() {
 // Works with the composer too
 const useApi = createApiComposer<MyApiStructure>(useStore);
 ```
+
+> **Key collision warning:** In development, if the same API key (e.g. `"getUser"`) is used across different store instances, a console warning is emitted. This is because race-condition tracking and request deduplication are shared globally. Use unique key names per store, or use the singleton store for shared keys.
 
 ## TypeScript Support
 

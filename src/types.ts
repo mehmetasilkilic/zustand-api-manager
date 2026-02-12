@@ -238,6 +238,34 @@ export interface ApiStore {
   invalidateApi: (key: string) => void
 
   /**
+   * Batch-invalidate multiple cached API keys in a single state update.
+   * Clears `fetchedAt` for each key while preserving existing data and status.
+   *
+   * @param keys - An array of API endpoint identifiers to invalidate.
+   *
+   * @example
+   * ```ts
+   * // Invalidate all user-related caches at once
+   * useApiStore.getState().invalidateApis(['getUser', 'getUserPosts', 'getUserSettings'])
+   * ```
+   */
+  invalidateApis: (keys: string[]) => void
+
+  /**
+   * Batch-reset multiple API keys back to their initial state in a single state update.
+   * Removes all data, errors, and persistence for each key.
+   *
+   * @param keys - An array of API endpoint identifiers to reset.
+   *
+   * @example
+   * ```ts
+   * // Clear all user-related state on logout
+   * useApiStore.getState().resetApiStates(['getUser', 'getUserPosts', 'getUserSettings'])
+   * ```
+   */
+  resetApiStates: (keys: string[]) => void
+
+  /**
    * Execute an API call with full lifecycle management: sets status to `LOADING`,
    * handles retries with exponential backoff, supports abort signals, runs through
    * the middleware chain, and updates the state to `SUCCESS` or `ERROR`.
