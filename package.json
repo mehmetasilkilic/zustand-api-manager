@@ -5,8 +5,9 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "zustand",
@@ -18,17 +19,19 @@
     "type": "git",
     "url": "https://github.com/mehmetasilkilic/zustand-api-manager"
   },
-  "author":{
+  "author": {
     "name": "Mehmet Asil Kılıç",
     "url": "https://github.com/mehmetasilkilic/"
   },
   "license": "MIT",
   "dependencies": {
-    "immer": "^10.1.1",
-    "zustand": "^4.5.5"
+    "immer": "^11.1.4",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@types/node": "^22.5.5",
-    "typescript": "^5.6.2"
+    "@types/node": "^25.2.3",
+    "happy-dom": "^20.6.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }
