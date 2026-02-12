@@ -1,5 +1,6 @@
 import { useApiStore } from './store'
-import { ApiCallOptions, ApiComposerResult, ApiEndpoint, ApiState, FetchStatus } from './types'
+import { ApiCallOptions, ApiComposerResult, ApiEndpoint, ApiState, ApiStore, FetchStatus } from './types'
+import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
  * Creates a fully type-safe API hook factory based on a predefined API structure.
@@ -9,6 +10,7 @@ import { ApiCallOptions, ApiComposerResult, ApiEndpoint, ApiState, FetchStatus }
  * hook automatically infers parameter and response types for each endpoint.
  *
  * @typeParam TApiStructure - An interface where each key maps to an `ApiEndpoint<Params, Response>`.
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
  * @returns A React hook that accepts an endpoint key and returns a typed {@link ApiComposerResult}.
  *
  * @example
@@ -26,7 +28,7 @@ import { ApiCallOptions, ApiComposerResult, ApiEndpoint, ApiState, FetchStatus }
  *   const { data, isLoading, handleApi } = useApi('getUser')
  *
  *   useEffect(() => {
- *     handleApi((params) => api.getUser(params), { retry: 2 })
+ *     handleApi({ id: userId }, (params) => api.getUser(params), { retry: 2 })
  *   }, [userId])
  *
  *   if (isLoading) return <Spinner />
@@ -34,7 +36,9 @@ import { ApiCallOptions, ApiComposerResult, ApiEndpoint, ApiState, FetchStatus }
  * }
  * ```
  */
-export function createApiComposer<TApiStructure>() {
+export function createApiComposer<TApiStructure>(
+  store?: UseBoundStore<StoreApi<ApiStore>>
+) {
   return function useApiComposer<K extends keyof TApiStructure>(
     key: K
   ): TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiComposerResult<R, P> : never {
@@ -42,10 +46,31 @@ export function createApiComposer<TApiStructure>() {
     type Params = Entry['params']
     type Response = Entry['response']
 
-    const apiState = useApiStore(state => state.apiStates[key as string]) as
+    const useStore = store ?? useApiStore
+    const apiState = useStore(state => state.apiStates[key as string]) as
       | ApiState<Response>
       | undefined
-    const handleApi = useApiStore(state => state.handleApi)
+    const handleApi = useStore(state => state.handleApi)
+
+    const composerHandleApi = (...args: unknown[]) => {
+      let params: Params
+      let apiCall: (params: Params) => Promise<{ data: Response }>
+      let options: ApiCallOptions | undefined
+
+      // For void params: handleApi(apiCall, options?)
+      // For non-void params: handleApi(params, apiCall, options?)
+      if (typeof args[0] === 'function') {
+        apiCall = args[0] as (params: Params) => Promise<{ data: Response }>
+        options = args[1] as ApiCallOptions | undefined
+        params = undefined as Params
+      } else {
+        params = args[0] as Params
+        apiCall = args[1] as (params: Params) => Promise<{ data: Response }>
+        options = args[2] as ApiCallOptions | undefined
+      }
+
+      return handleApi(key as string, () => apiCall(params), options)
+    }
 
     return {
       data: apiState?.data ?? null,
@@ -54,10 +79,7 @@ export function createApiComposer<TApiStructure>() {
       isSuccess: apiState?.status === FetchStatus.SUCCESS,
       isError: apiState?.status === FetchStatus.ERROR,
       error: apiState?.error ?? null,
-      handleApi: (
-        apiCall: (params: Params) => Promise<{ data: Response }>,
-        options?: ApiCallOptions
-      ) => handleApi(key as string, apiCall as unknown as () => Promise<{ data: Response }>, options)
+      handleApi: composerHandleApi
     } as TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiComposerResult<R, P> : never
   }
 }

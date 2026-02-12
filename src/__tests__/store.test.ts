@@ -89,11 +89,12 @@ describe('handleApi — success path', () => {
     expect(getState().apiStates['users'].data).toEqual({ id: 1, name: 'test' })
   })
 
-  it('calls onSuccess callback', async () => {
+  it('calls onSuccess callback with response data', async () => {
     const onSuccess = vi.fn()
     const apiCall = () => Promise.resolve({ data: 'ok' })
     await getState().handleApi('users', apiCall, { onSuccess })
     expect(onSuccess).toHaveBeenCalledOnce()
+    expect(onSuccess).toHaveBeenCalledWith('ok')
   })
 })
 
@@ -139,11 +140,12 @@ describe('handleApi — error path', () => {
     expect(error.code).toBe('NOT_FOUND')
   })
 
-  it('calls onError callback', async () => {
+  it('calls onError callback with error', async () => {
     const onError = vi.fn()
     const apiCall = () => Promise.reject(new Error('fail'))
     await getState().handleApi('users', apiCall, { onError })
     expect(onError).toHaveBeenCalledOnce()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'fail' }))
   })
 
   it('calls registered error handlers', async () => {
@@ -240,6 +242,60 @@ describe('handleApi — retry', () => {
   })
 })
 
+// ── handleApi — race condition ───────────────────────────────
+
+describe('handleApi — race condition', () => {
+  it('discards stale response when a newer request is made', async () => {
+    let resolveFirst: (value: { data: string }) => void
+    const firstCall = () =>
+      new Promise<{ data: string }>(resolve => {
+        resolveFirst = resolve
+      })
+
+    const secondCall = () => Promise.resolve({ data: 'second' })
+
+    // Start first request
+    const firstPromise = getState().handleApi('users', firstCall)
+
+    // Start second request (supersedes the first)
+    const secondPromise = getState().handleApi('users', secondCall)
+    await secondPromise
+
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['users'].data).toBe('second')
+
+    // Now resolve the first (stale) request — it should be discarded
+    resolveFirst!({ data: 'first' })
+    await firstPromise
+
+    // State should still reflect the second (latest) request
+    expect(getState().apiStates['users'].data).toBe('second')
+  })
+
+  it('discards stale error when a newer request succeeds', async () => {
+    let rejectFirst: (reason: Error) => void
+    const firstCall = () =>
+      new Promise<{ data: string }>((_, reject) => {
+        rejectFirst = reject
+      })
+
+    const secondCall = () => Promise.resolve({ data: 'success' })
+
+    const firstPromise = getState().handleApi('users', firstCall)
+    const secondPromise = getState().handleApi('users', secondCall)
+    await secondPromise
+
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+
+    // First request errors — should be discarded
+    rejectFirst!(new Error('stale error'))
+    await firstPromise
+
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['users'].error).toBeNull()
+  })
+})
+
 // ── addMiddleware ────────────────────────────────────────────
 
 describe('addMiddleware', () => {
@@ -318,5 +374,37 @@ describe('addErrorHandler', () => {
     await getState().handleApi('users', apiCall)
     expect(h1).toHaveBeenCalledOnce()
     expect(h2).toHaveBeenCalledOnce()
+  })
+})
+
+// ── unsubscribe ──────────────────────────────────────────────
+
+describe('unsubscribe', () => {
+  it('addMiddleware returns unsubscribe function that removes middleware', () => {
+    const mw: ApiMiddleware = next => next
+    const unsub = getState().addMiddleware(mw)
+    expect(getState().middleware).toHaveLength(1)
+
+    unsub()
+    expect(getState().middleware).toHaveLength(0)
+  })
+
+  it('addErrorHandler returns unsubscribe function that removes handler', () => {
+    const handler = vi.fn()
+    const unsub = getState().addErrorHandler(handler)
+    expect(getState().errorHandlers).toHaveLength(1)
+
+    unsub()
+    expect(getState().errorHandlers).toHaveLength(0)
+  })
+
+  it('unsubscribed error handler is not called on failure', async () => {
+    const handler = vi.fn()
+    const unsub = getState().addErrorHandler(handler)
+    unsub()
+
+    const apiCall = () => Promise.reject(new Error('fail'))
+    await getState().handleApi('users', apiCall)
+    expect(handler).not.toHaveBeenCalled()
   })
 })

@@ -13,10 +13,11 @@ A powerful and flexible API state management solution built on top of Zustand.
 - [Usage](#usage)
   - [Basic Usage](#basic-usage)
   - [Global Loading](#global-loading)
-  - [Advanced Usage](#advanced-usage)
+  - [Advanced Usage (Composer)](#advanced-usage-composer)
 - [API Reference](#api-reference)
 - [Middleware and Error Handling](#middleware-and-error-handling)
 - [Abort & Retry](#abort--retry)
+- [Multiple Store Instances](#multiple-store-instances)
 - [TypeScript Support](#typescript-support)
 - [Contributing](#contributing)
 - [License](#license)
@@ -24,8 +25,10 @@ A powerful and flexible API state management solution built on top of Zustand.
 ## Installation
 
 ```bash
-npm install zustand-api-manager
+npm install zustand-api-manager zustand immer
 ```
+
+`zustand` and `immer` are peer dependencies and must be installed alongside the package.
 
 ## Features
 
@@ -34,9 +37,12 @@ npm install zustand-api-manager
 - Support for idle, loading, success, and error states
 - Persistent state options
 - Middleware support for customizing API call behavior
-- Global error handling
+- Global error handling with unsubscribe support
 - Request cancellation via `AbortSignal`
 - Automatic retry with exponential back-off
+- Race condition protection (stale responses are automatically discarded)
+- SSR-safe (no `localStorage` access on the server)
+- Factory function for multiple isolated store instances
 - TypeScript support with strong typing
 
 ## Usage
@@ -67,11 +73,11 @@ function MyComponent() {
     handleApi(
       () => fetchUserData(params), // API call (close over your params)
       {
-        onSuccess: () => {
-          console.log("User data fetched successfully!");
+        onSuccess: (data) => {
+          console.log("User data fetched successfully!", data);
         },
-        onError: () => {
-          console.error("An error occurred while fetching user data.");
+        onError: (error) => {
+          console.error("An error occurred:", error.message);
         },
         persist: true
       }
@@ -83,35 +89,6 @@ function MyComponent() {
   if (isError) return <div>Error occurred</div>;
 
   return <div>{data?.username}</div>;
-}
-```
-
-### Advanced Usage
-
-1. Create a custom API composer for your specific API structure:
-
-```typescript
-import { createApiComposer, ApiEndpoint } from "zustand-api-manager";
-
-interface MyApiStructure {
-  getUsers: ApiEndpoint<void, User[]>;
-  getPost: ApiEndpoint<{ id: number }, Post>;
-}
-
-export const useApi = createApiComposer<MyApiStructure>();
-```
-
-2. Use the custom API composer in your components:
-
-```typescript
-function UserProfile() {
-  const { data: userData, isLoading, handleApi } = useApi("getUsers");
-
-  useEffect(() => {
-    handleApi(() => fetchUserData({ id: 1 }));
-  }, []);
-
-  // Render component...
 }
 ```
 
@@ -143,30 +120,98 @@ function Dashboard() {
 }
 ```
 
+### Advanced Usage (Composer)
+
+The composer provides a fully type-safe API hook factory with parameter passthrough.
+
+1. Define your API structure and create the composer:
+
+```typescript
+import { createApiComposer, ApiEndpoint } from "zustand-api-manager";
+
+interface MyApiStructure {
+  getUsers: ApiEndpoint<void, User[]>;
+  getPost: ApiEndpoint<{ id: number }, Post>;
+}
+
+export const useApi = createApiComposer<MyApiStructure>();
+```
+
+2. Use it in your components. For endpoints with parameters, pass them as the first argument:
+
+```typescript
+function PostDetail({ postId }: { postId: number }) {
+  const { data, isLoading, handleApi } = useApi("getPost");
+
+  useEffect(() => {
+    // Params are passed through to the apiCall function
+    handleApi({ id: postId }, (params) => fetchPost(params));
+  }, [postId]);
+
+  if (isLoading) return <Spinner />;
+  return <div>{data?.title}</div>;
+}
+```
+
+For endpoints with `void` params, call `handleApi` with just the API function:
+
+```typescript
+function UserList() {
+  const { data, isLoading, handleApi } = useApi("getUsers");
+
+  useEffect(() => {
+    handleApi(() => fetchUsers());
+  }, []);
+
+  if (isLoading) return <Spinner />;
+  return <ul>{data?.map((u) => <li key={u.id}>{u.name}</li>)}</ul>;
+}
+```
+
 ## API Reference
 
 ### `useApiStore`
 
-The main store for managing API states. Provides the following methods:
+The default singleton store for managing API states. Provides the following methods:
 
-- `setApiState`: Update the state for a specific API key
-- `resetApiState`: Reset the state for a specific API key
-- `handleApi`: Handle an API call with automatic state management
-- `addMiddleware`: Add middleware to customize API call behavior
-- `addErrorHandler`: Add a global error handler
+- `setApiState(key, state, persist?)` — Update the state for a specific API key
+- `resetApiState(key)` — Reset the state for a specific API key
+- `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management
+- `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
+- `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
+
+### `createApiStore(config?)`
+
+Factory function that creates an isolated store instance. Useful for SSR, testing, or when you need multiple independent stores.
+
+```typescript
+import { createApiStore } from "zustand-api-manager";
+
+const { useStore } = createApiStore({
+  storageKey: "my-app-api", // localStorage key (default: 'api_store')
+  storage: customStorage     // custom storage backend (optional)
+});
+```
 
 ### `useApiHandler`
 
 A hook for managing individual API calls. Returns an object with:
 
-- `isIdle`: Boolean indicating if the API has not been called yet
-- `isLoading`: Boolean indicating if the API is currently loading
-- `isError`: Boolean indicating if an error occurred
-- `isSuccess`: Boolean indicating if the API call was successful
-- `data`: The data returned from the API call
-- `error`: Any error that occurred during the API call
-- `handleApi`: Function to trigger the API call
-- `resetApi`: Function to reset the API state
+- `isIdle` — `true` if the API has not been called yet
+- `isLoading` — `true` if the API is currently loading
+- `isError` — `true` if an error occurred
+- `isSuccess` — `true` if the API call was successful
+- `data` — The data returned from the API call
+- `error` — The error object if the call failed (`ApiError`)
+- `handleApi(apiCall, options?)` — Function to trigger the API call
+- `resetApi()` — Function to reset the API state
+
+Accepts an optional second argument to use a custom store instance:
+
+```typescript
+const { useStore } = createApiStore();
+const { data } = useApiHandler<User>("getUser", useStore);
+```
 
 ### `useLoadingStates`
 
@@ -176,47 +221,69 @@ A hook to check loading states for one or more API keys:
 - `string`: returns `true` if the given key is loading
 - `string[]`: returns `true` if **any** of the given keys are loading
 
+Also accepts an optional store instance as the second argument.
+
 ### `createApiComposer`
 
-A function to create a strongly-typed API composer for your specific API structure.
+Creates a strongly-typed API composer. Accepts an optional store instance:
+
+```typescript
+const useApi = createApiComposer<MyApiStructure>();          // uses default store
+const useApi = createApiComposer<MyApiStructure>(useStore);  // uses custom store
+```
 
 ### `FetchStatus`
 
-An enum representing the different states of an API call:
+A constant object representing the different states of an API call:
 
-- `IDLE`
-- `LOADING`
-- `SUCCESS`
-- `ERROR`
+- `FetchStatus.IDLE`
+- `FetchStatus.LOADING`
+- `FetchStatus.SUCCESS`
+- `FetchStatus.ERROR`
 
 ### `ApiCallOptions`
 
 Options you can pass to `handleApi`:
 
-- `onSuccess?: () => void` — called after a successful response
-- `onError?: () => void` — called after all retries are exhausted
+- `onSuccess?: (data: unknown) => void` — called with the response data after a successful response
+- `onError?: (error: ApiError) => void` — called with the error after all retries are exhausted
 - `persist?: boolean` — persist this key's state to localStorage
 - `signal?: AbortSignal` — abort the request (from an `AbortController`)
 - `retry?: number` — number of retries on failure (default `0`, exponential back-off)
 
 ## Middleware and Error Handling
 
-You can add custom middleware and error handlers to customize the behavior of your API calls:
+You can add custom middleware and error handlers. Both return an **unsubscribe** function for cleanup:
 
 ```typescript
 const apiStore = useApiStore.getState();
 
-// Add middleware
-apiStore.addMiddleware((next) => async (key, apiCall, options) => {
+// Add middleware — returns unsubscribe function
+const removeMiddleware = apiStore.addMiddleware((next) => async (key, apiCall, options) => {
   console.log(`API call started: ${key}`);
   await next(key, apiCall, options);
   console.log(`API call finished: ${key}`);
 });
 
-// Add error handler
-apiStore.addErrorHandler((error, key) => {
-  console.error(`Error in API call ${key}:`, error);
+// Add error handler — returns unsubscribe function
+const removeErrorHandler = apiStore.addErrorHandler((error, key) => {
+  console.error(`Error in API call ${key}:`, error.message);
 });
+
+// Clean up when no longer needed
+removeMiddleware();
+removeErrorHandler();
+```
+
+This is particularly useful in React effects:
+
+```typescript
+useEffect(() => {
+  const unsub = useApiStore.getState().addErrorHandler((error, key) => {
+    showToast(`${key} failed: ${error.message}`);
+  });
+  return unsub; // cleanup on unmount
+}, []);
 ```
 
 ## Abort & Retry
@@ -250,6 +317,29 @@ Set `retry` to automatically retry on failure with exponential back-off:
 
 ```typescript
 handleApi(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts)
+```
+
+### Race condition protection
+
+When multiple requests are made for the same key, only the latest request's result is applied. Earlier (stale) responses are automatically discarded. This happens transparently — no configuration needed.
+
+## Multiple Store Instances
+
+By default, all hooks use a shared singleton store. For SSR, testing, or isolated modules, create separate instances with `createApiStore`:
+
+```typescript
+import { createApiStore, useApiHandler, createApiComposer } from "zustand-api-manager";
+
+const { useStore } = createApiStore({ storageKey: "my-feature" });
+
+// Pass the custom store to hooks
+function MyComponent() {
+  const { data, handleApi } = useApiHandler<User>("getUser", useStore);
+  // ...
+}
+
+// Or to the composer
+const useApi = createApiComposer<MyApiStructure>(useStore);
 ```
 
 ## TypeScript Support

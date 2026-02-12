@@ -8,16 +8,17 @@
  * }
  * ```
  */
-export enum FetchStatus {
+export const FetchStatus = {
   /** No request has been made yet. This is the default state. */
-  IDLE = 'IDLE',
+  IDLE: 'IDLE',
   /** A request is currently in progress. */
-  LOADING = 'LOADING',
+  LOADING: 'LOADING',
   /** The request completed successfully. */
-  SUCCESS = 'SUCCESS',
+  SUCCESS: 'SUCCESS',
   /** The request failed with an error. */
-  ERROR = 'ERROR'
-}
+  ERROR: 'ERROR'
+} as const
+export type FetchStatus = (typeof FetchStatus)[keyof typeof FetchStatus]
 
 /**
  * Holds the current state of a single API endpoint, including its fetch status,
@@ -65,16 +66,16 @@ export interface ApiError extends Error {
  *   persist: true,
  *   retry: 3,
  *   signal: controller.signal,
- *   onSuccess: () => console.log('Loaded!'),
- *   onError: () => console.error('Failed!')
+ *   onSuccess: (data) => console.log('Loaded!', data),
+ *   onError: (error) => console.error('Failed!', error)
  * })
  * ```
  */
 export interface ApiCallOptions {
-  /** Callback invoked when the API call succeeds. */
-  onSuccess?: () => void
-  /** Callback invoked when the API call fails (after all retries are exhausted). */
-  onError?: () => void
+  /** Callback invoked when the API call succeeds. Receives the response data. */
+  onSuccess?: (data: unknown) => void
+  /** Callback invoked when the API call fails (after all retries are exhausted). Receives the error. */
+  onError?: (error: ApiError) => void
   /** If `true`, the resulting state will be persisted to `localStorage` and survive page reloads. */
   persist?: boolean
   /** An `AbortSignal` to cancel the request. When aborted, the state transitions to `ERROR` with code `'ABORT_ERR'`. */
@@ -136,7 +137,7 @@ export type ApiMiddleware = (next: ApiMiddlewareHandler) => ApiMiddlewareHandler
  * The shape of the Zustand store that manages all API states.
  * This is the underlying store used by all hooks and the composer.
  *
- * The store uses `immer` for immutable state updates and `persist` middleware
+ * The store uses `immer` middleware for immutable state updates and `persist` middleware
  * for optional `localStorage` persistence of selected keys.
  */
 export interface ApiStore {
@@ -187,15 +188,31 @@ export interface ApiStore {
    * Middleware is composed in registration order (first registered = outermost wrapper).
    *
    * @param middleware - The middleware function to add.
+   * @returns A function to unsubscribe (remove) the middleware.
    */
-  addMiddleware: (middleware: ApiMiddleware) => void
+  addMiddleware: (middleware: ApiMiddleware) => () => void
 
   /**
    * Register a global error handler that will be called whenever any API call fails.
    *
    * @param handler - A callback receiving the error and the API key that failed.
+   * @returns A function to unsubscribe (remove) the error handler.
    */
-  addErrorHandler: (handler: (error: ApiError, key: string) => void) => void
+  addErrorHandler: (handler: (error: ApiError, key: string) => void) => () => void
+}
+
+/**
+ * Configuration options for creating an API store instance.
+ */
+export interface ApiStoreConfig {
+  /** The localStorage key used for persistence. Defaults to `'api_store'`. */
+  storageKey?: string
+  /** A custom storage object (must implement getItem, setItem, removeItem). Defaults to localStorage (SSR-safe). */
+  storage?: {
+    getItem: (name: string) => string | null | Promise<string | null>
+    setItem: (name: string, value: string) => void | Promise<void>
+    removeItem: (name: string) => void | Promise<void>
+  }
 }
 
 /**
@@ -222,11 +239,13 @@ export interface ApiComposerResult<T, P = void> {
    * Trigger an API call for this endpoint. The `apiCall` function receives
    * the typed parameters and must return `{ data: T }`.
    *
+   * @param params - The typed parameters for the API call.
    * @param apiCall - A function that accepts typed params and returns the response.
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
    */
   handleApi: (
-    apiCall: (params: P) => Promise<{ data: T }>,
-    options?: ApiCallOptions
+    ...args: P extends void
+      ? [apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions]
+      : [params: P, apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions]
   ) => Promise<void>
 }

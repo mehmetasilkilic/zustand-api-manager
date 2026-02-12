@@ -1,11 +1,13 @@
 import { useApiStore } from './store'
-import { ApiCallOptions, FetchStatus } from './types'
+import { ApiCallOptions, ApiStore, FetchStatus } from './types'
+import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
  * A React hook that returns whether any of the specified API calls are currently loading.
  * Useful for showing global loading indicators (e.g. progress bars, overlays).
  *
  * @param keys - A single API key, an array of API keys, or `undefined` to check all tracked APIs.
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
  * @returns `true` if at least one of the specified API calls has status `LOADING`.
  *
  * @example
@@ -20,8 +22,12 @@ import { ApiCallOptions, FetchStatus } from './types'
  * const isDataLoading = useLoadingStates(['getUser', 'getPosts'])
  * ```
  */
-export const useLoadingStates = (keys?: string | string[]): boolean => {
-  return useApiStore(state => {
+export const useLoadingStates = (
+  keys?: string | string[],
+  store?: UseBoundStore<StoreApi<ApiStore>>
+): boolean => {
+  const useStore = store ?? useApiStore
+  return useStore(state => {
     if (!keys) {
       return Object.values(state.apiStates).some(s => s.status === FetchStatus.LOADING)
     }
@@ -38,6 +44,7 @@ export const useLoadingStates = (keys?: string | string[]): boolean => {
  *
  * @typeParam T - The expected response data type.
  * @param key - The unique identifier for the API endpoint.
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
  * @returns An object containing the current state (`data`, `error`, status booleans),
  *          a `handleApi` function to trigger the call, and a `resetApi` function to clear the state.
  *
@@ -58,10 +65,14 @@ export const useLoadingStates = (keys?: string | string[]): boolean => {
  * }
  * ```
  */
-export const useApiHandler = <T>(key: string) => {
-  const apiState = useApiStore(state => state.apiStates[key])
-  const handleApi = useApiStore(state => state.handleApi)
-  const resetApiState = useApiStore(state => state.resetApiState)
+export const useApiHandler = <T>(
+  key: string,
+  store?: UseBoundStore<StoreApi<ApiStore>>
+) => {
+  const useStore = store ?? useApiStore
+  const apiState = useStore(state => state.apiStates[key])
+  const handleApi = useStore(state => state.handleApi)
+  const resetApiState = useStore(state => state.resetApiState)
 
   return {
     isIdle: !apiState || apiState.status === FetchStatus.IDLE,

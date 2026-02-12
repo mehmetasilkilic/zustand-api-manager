@@ -1,4 +1,4 @@
 export * from './types'
-export { useApiStore } from './store'
+export { useApiStore, createApiStore } from './store'
 export { useLoadingStates, useApiHandler } from './hooks'
 export { createApiComposer } from './composer'
