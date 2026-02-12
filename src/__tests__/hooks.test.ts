@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
-import { useLoadingStates, useApiHandler, usePolling } from '../hooks'
+import { useLoadingStates, useApiHandler } from '../hooks'
 import { FetchStatus } from '../types'
 
 beforeEach(() => {
@@ -197,93 +197,3 @@ describe('useApiHandler', () => {
   })
 })
 
-// ── usePolling ──────────────────────────────────────────────
-
-describe('usePolling', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('calls callback at the specified interval', () => {
-    const callback = vi.fn()
-    renderHook(() => usePolling(callback, 1000))
-
-    expect(callback).not.toHaveBeenCalled()
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(1)
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(2)
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(3)
-  })
-
-  it('does not poll when interval is null', () => {
-    const callback = vi.fn()
-    renderHook(() => usePolling(callback, null))
-
-    vi.advanceTimersByTime(5000)
-    expect(callback).not.toHaveBeenCalled()
-  })
-
-  it('does not poll when interval is 0', () => {
-    const callback = vi.fn()
-    renderHook(() => usePolling(callback, 0))
-
-    vi.advanceTimersByTime(5000)
-    expect(callback).not.toHaveBeenCalled()
-  })
-
-  it('cleans up interval on unmount', () => {
-    const callback = vi.fn()
-    const { unmount } = renderHook(() => usePolling(callback, 1000))
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(1)
-
-    unmount()
-
-    vi.advanceTimersByTime(3000)
-    expect(callback).toHaveBeenCalledTimes(1)
-  })
-
-  it('restarts interval when interval value changes', () => {
-    const callback = vi.fn()
-    const { rerender } = renderHook(({ interval }) => usePolling(callback, interval), {
-      initialProps: { interval: 1000 as number | null }
-    })
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(1)
-
-    // Change to 500ms
-    rerender({ interval: 500 })
-
-    vi.advanceTimersByTime(500)
-    expect(callback).toHaveBeenCalledTimes(2)
-
-    vi.advanceTimersByTime(500)
-    expect(callback).toHaveBeenCalledTimes(3)
-  })
-
-  it('stops polling when interval changes to null', () => {
-    const callback = vi.fn()
-    const { rerender } = renderHook(({ interval }) => usePolling(callback, interval), {
-      initialProps: { interval: 1000 as number | null }
-    })
-
-    vi.advanceTimersByTime(1000)
-    expect(callback).toHaveBeenCalledTimes(1)
-
-    rerender({ interval: null })
-
-    vi.advanceTimersByTime(5000)
-    expect(callback).toHaveBeenCalledTimes(1)
-  })
-})

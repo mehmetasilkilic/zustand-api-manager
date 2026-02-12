@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useApiStore } from '../store'
+import { useApiStore, createApiStore } from '../store'
 import { FetchStatus } from '../types'
 import type { ApiMiddleware } from '../types'
 
@@ -881,5 +881,135 @@ describe('invalidateApi', () => {
     // Should not throw
     getState().invalidateApi('unknown')
     expect(getState().apiStates['unknown']).toBeUndefined()
+  })
+})
+
+// ── startPolling ─────────────────────────────────────────────
+
+describe('startPolling', () => {
+  it('calls handleApi at the specified interval', () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    getState().startPolling('users', apiCall, 1000)
+
+    expect(apiCall).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(3)
+
+    vi.useRealTimers()
+  })
+
+  it('returns a stop function that clears the interval', () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const stop = getState().startPolling('users', apiCall, 1000)
+
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    stop()
+
+    vi.advanceTimersByTime(3000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    vi.useRealTimers()
+  })
+
+  it('passes options to each handleApi call', async () => {
+    vi.useFakeTimers()
+    const onSuccess = vi.fn()
+    const apiCall = () => Promise.resolve({ data: 'polled' })
+
+    const stop = getState().startPolling('users', apiCall, 1000, { onSuccess })
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(onSuccess).toHaveBeenCalledWith('polled')
+
+    stop()
+    vi.useRealTimers()
+  })
+})
+
+// ── key ownership warning ────────────────────────────────────
+
+describe('key ownership warning', () => {
+  it('warns when the same key is used across different store instances', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const storeA = createApiStore({ storageKey: 'store-a' })
+    const storeB = createApiStore({ storageKey: 'store-b' })
+
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+
+    // First store claims the key — no warning
+    await storeA.useStore.getState().handleApi('shared-key', apiCall)
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    // Second store uses the same key — should warn
+    await storeB.useStore.getState().handleApi('shared-key', apiCall)
+    expect(warnSpy).toHaveBeenCalledOnce()
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Key "shared-key" is already used by another store instance')
+    )
+
+    warnSpy.mockRestore()
+  })
+
+  it('does not warn when different stores use different keys', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const storeA = createApiStore({ storageKey: 'store-a2' })
+    const storeB = createApiStore({ storageKey: 'store-b2' })
+
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+
+    await storeA.useStore.getState().handleApi('key-a', apiCall)
+    await storeB.useStore.getState().handleApi('key-b', apiCall)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+  })
+
+  it('does not warn when the same store reuses a key', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const storeA = createApiStore({ storageKey: 'store-a3' })
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+
+    await storeA.useStore.getState().handleApi('my-key', apiCall)
+    await storeA.useStore.getState().handleApi('my-key', apiCall)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+  })
+
+  it('allows reuse of a key after resetApiState releases ownership', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const storeA = createApiStore({ storageKey: 'store-a4' })
+    const storeB = createApiStore({ storageKey: 'store-b4' })
+
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+
+    await storeA.useStore.getState().handleApi('released-key', apiCall)
+    storeA.useStore.getState().resetApiState('released-key')
+
+    // After reset, storeB should be able to claim the key without warning
+    await storeB.useStore.getState().handleApi('released-key', apiCall)
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    warnSpy.mockRestore()
   })
 })

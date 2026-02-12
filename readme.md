@@ -54,7 +54,7 @@ npm install zustand-api-manager zustand immer
 - Request timeout with `TIMEOUT` error code
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
 - `onSettled` callback — runs after both success and error for cleanup
-- `usePolling` hook for interval-based refetching
+- `startPolling` store method for interval-based refetching (no React import)
 - `fetchedAt` timestamp tracking for every endpoint
 - SSR-safe (no `localStorage` access on the server)
 - Factory function for multiple isolated store instances with pre-bound hooks
@@ -259,28 +259,34 @@ A hook to check loading states for one or more API keys:
 
 Also accepts an optional store instance as the second argument.
 
-### `usePolling`
+### `startPolling`
 
-A hook that calls a callback at a regular interval. Useful for polling an API endpoint:
+A store method that polls an API endpoint at a regular interval using `setInterval`. Returns a stop function. No React import required.
 
 ```typescript
-import { useApiHandler, usePolling } from "zustand-api-manager";
+// Start polling — returns a stop function
+const stop = useApiStore.getState().startPolling(
+  "notifications",
+  () => fetchNotifications(),
+  10_000 // every 10 seconds
+);
 
-function LiveDashboard() {
-  const { data, handleApi } = useApiHandler<Stats>("stats");
-
-  // Poll every 30 seconds
-  usePolling(() => handleApi(() => fetchStats()), 30_000);
-
-  // Pass null to disable polling
-  const [enabled, setEnabled] = useState(true);
-  usePolling(() => handleApi(() => fetchStats()), enabled ? 30_000 : null);
-
-  return <div>{data?.activeUsers} active users</div>;
-}
+// Stop polling when done
+stop();
 ```
 
-The callback reference is always kept up-to-date without restarting the interval. The interval is cleaned up automatically on unmount.
+In a React component, clean up in a `useEffect`:
+
+```typescript
+useEffect(() => {
+  const stop = useApiStore.getState().startPolling(
+    "stats",
+    () => fetchStats(),
+    30_000
+  );
+  return stop; // cleanup on unmount
+}, []);
+```
 
 ### `createApiComposer`
 
@@ -528,26 +534,35 @@ Once the shared request completes, subsequent calls start a fresh request. Dedup
 
 ## Polling
 
-Use the `usePolling` hook to call a function at a regular interval:
+Use `startPolling` on the store to poll an endpoint at a regular interval. It returns a stop function:
 
 ```typescript
-import { useApiHandler, usePolling } from "zustand-api-manager";
+const stop = useApiStore.getState().startPolling(
+  "notifications",
+  () => fetchNotifications(),
+  10_000 // every 10 seconds
+);
 
+// Stop when done
+stop();
+```
+
+In a React component, use it inside `useEffect` for automatic cleanup:
+
+```typescript
 function NotificationBell() {
-  const { data, handleApi } = useApiHandler<Notification[]>("notifications");
+  const { data } = useApiHandler<Notification[]>("notifications");
 
-  // Fetch notifications every 10 seconds
-  usePolling(() => handleApi(() => fetchNotifications()), 10_000);
+  useEffect(() => {
+    return useApiStore.getState().startPolling(
+      "notifications",
+      () => fetchNotifications(),
+      10_000
+    );
+  }, []);
 
   return <span>({data?.length ?? 0})</span>;
 }
-```
-
-Pass `null` or `undefined` as the interval to disable polling dynamically:
-
-```typescript
-const [isActive, setIsActive] = useState(true);
-usePolling(() => handleApi(() => fetchData()), isActive ? 5_000 : null);
 ```
 
 ## The `onSettled` Callback

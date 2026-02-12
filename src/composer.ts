@@ -18,7 +18,7 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  *
  * @typeParam TApiStructure - An interface where each key maps to an `ApiEndpoint<Params, Response>`.
  * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
- * @returns A React hook that accepts an endpoint key and returns a typed {@link ApiComposerResult}.
+ * @returns A hook that accepts an endpoint key and returns a typed {@link ApiComposerResult}.
  *
  * @example
  * ```tsx

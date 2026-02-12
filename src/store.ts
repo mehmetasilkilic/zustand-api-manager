@@ -86,6 +86,37 @@ const activeRequests: Record<string, number> = {}
 const pendingRequests = new Map<string, Promise<unknown>>()
 
 /**
+ * Dev-time registry that maps each API key to the store instance that owns it.
+ * Warns when the same key is used across different store instances to prevent
+ * accidental collisions in the shared `activeRequests` / `pendingRequests` maps.
+ */
+const keyOwnerRegistry =
+  process.env.NODE_ENV !== 'production' ? new Map<string, object>() : null
+
+/** Warns once per key if a different store tries to claim it. */
+const warnedKeys = process.env.NODE_ENV !== 'production' ? new Set<string>() : null
+
+const checkKeyOwnership = (key: string, storeRef: object) => {
+  if (!keyOwnerRegistry || !warnedKeys) return
+  const owner = keyOwnerRegistry.get(key)
+  if (owner && owner !== storeRef && !warnedKeys.has(key)) {
+    warnedKeys.add(key)
+    console.warn(
+      `[zustand-api-manager] Key "${key}" is already used by another store instance. ` +
+        `Using the same key across different stores will cause shared race-condition tracking ` +
+        `and deduplication to interfere. Use unique key names per store or use the singleton store.`
+    )
+  }
+  keyOwnerRegistry.set(key, storeRef)
+}
+
+const releaseKeyOwnership = (key: string) => {
+  if (!keyOwnerRegistry || !warnedKeys) return
+  keyOwnerRegistry.delete(key)
+  warnedKeys.delete(key)
+}
+
+/**
  * Creates a new Zustand store instance for managing API states.
  *
  * @param config - Optional configuration for storage key and custom storage.
@@ -106,6 +137,9 @@ const pendingRequests = new Map<string, Promise<unknown>>()
 export function createApiStore(config: ApiStoreConfig = {}) {
   const { storageKey = STORAGE_KEY, storage: customStorage } = config
 
+  /** Stable identity object used to track key ownership for this store instance. */
+  const storeRef = {}
+
   const useStore = create<ApiStore>()(
     persist(
       immer((set, get) => ({
@@ -117,6 +151,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         setApiState: <T>(key: string, state: Partial<ApiState<T>>, shouldPersist = false) =>
           set(draft => {
             if (!draft.apiStates[key]) {
+              checkKeyOwnership(key, storeRef)
               draft.apiStates[key] = { ...initialApiState } as ApiState<T>
             }
 
@@ -134,6 +169,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           // Clean up race-condition counter and pending dedup to prevent memory leak
           delete activeRequests[key]
           pendingRequests.delete(key)
+          releaseKeyOwnership(key)
           set(draft => {
             delete draft.apiStates[key]
             delete draft.persistentKeys[key]
@@ -152,6 +188,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           apiCall: () => Promise<{ data: T }>,
           options: ApiCallOptions<T> = {}
         ): Promise<T | undefined> => {
+          checkKeyOwnership(key, storeRef)
           const { staleTime, dedupe } = options
 
           // Cache / staleTime: skip fetch if data is fresh enough
@@ -351,6 +388,16 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           }
 
           return promise
+        },
+
+        startPolling: <T>(
+          key: string,
+          apiCall: () => Promise<{ data: T }>,
+          interval: number,
+          options?: ApiCallOptions<T>
+        ) => {
+          const id = setInterval(() => get().handleApi(key, apiCall, options), interval)
+          return () => clearInterval(id)
         },
 
         addMiddleware: middleware => {

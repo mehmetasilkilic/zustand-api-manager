@@ -1,10 +1,9 @@
-import { useEffect, useRef } from 'react'
 import { useApiStore } from './store'
 import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
- * A React hook that returns whether any of the specified API calls are currently loading.
+ * A hook that returns whether any of the specified API calls are currently loading.
  * Useful for showing global loading indicators (e.g. progress bars, overlays).
  *
  * @param keys - A single API key, an array of API keys, or `undefined` to check all tracked APIs.
@@ -38,7 +37,7 @@ export const useLoadingStates = (
 }
 
 /**
- * A React hook that provides reactive access to a single API endpoint's state
+ * A hook that provides reactive access to a single API endpoint's state
  * along with functions to trigger the API call and reset its state.
  *
  * This is the primary hook for interacting with individual API endpoints.
@@ -92,34 +91,3 @@ export const useApiHandler = <T>(
   }
 }
 
-/**
- * A React hook that calls a callback at a regular interval.
- * Useful for polling an API endpoint on a timer.
- *
- * The callback reference is always kept up-to-date without restarting the interval.
- * Pass `null` or `undefined` as the interval to disable polling.
- *
- * @param callback - The function to call on each interval tick.
- * @param interval - The interval in milliseconds, or `null`/`undefined` to disable.
- *
- * @example
- * ```tsx
- * const { handleApi } = useApiHandler<User[]>('users')
- *
- * usePolling(() => handleApi(fetchUsers), 30_000)
- * ```
- */
-export const usePolling = (
-  callback: () => void | Promise<void>,
-  interval: number | null | undefined
-): void => {
-  const callbackRef = useRef(callback)
-  callbackRef.current = callback
-
-  useEffect(() => {
-    if (interval == null || interval <= 0) return
-
-    const id = setInterval(() => callbackRef.current(), interval)
-    return () => clearInterval(id)
-  }, [interval])
-}
