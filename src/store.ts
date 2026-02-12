@@ -20,11 +20,14 @@ const abortableSleep = (ms: number, signal?: AbortSignal) =>
       reject(new Error('Aborted'))
       return
     }
-    const timer = setTimeout(resolve, ms)
     const onAbort = () => {
       clearTimeout(timer)
       reject(new Error('Aborted'))
     }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 
@@ -148,7 +151,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         middleware: [],
         errorHandlers: [],
 
-        setApiState: <T>(key: string, state: Partial<ApiState<T>>, shouldPersist = false) =>
+        setApiState: <T>(key: string, state: Partial<ApiState<T>>, shouldPersist?: boolean) =>
           set(draft => {
             if (!draft.apiStates[key]) {
               checkKeyOwnership(key, storeRef)
@@ -158,11 +161,12 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             const prevState = draft.apiStates[key] as ApiState<T>
             Object.assign(prevState, state)
 
-            if (shouldPersist) {
+            if (shouldPersist === true) {
               draft.persistentKeys[key] = true
-            } else {
+            } else if (shouldPersist === false) {
               delete draft.persistentKeys[key]
             }
+            // undefined = don't change persistence
           }),
 
         resetApiState: (key: string) => {

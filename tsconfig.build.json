@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "declaration": true,
-    "outDir": "./lib/cjs"
-  },
-  "exclude": ["node_modules", "src/__tests__"]
-}

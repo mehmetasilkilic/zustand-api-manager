@@ -46,6 +46,14 @@ describe('setApiState', () => {
     getState().setApiState('users', { status: FetchStatus.IDLE }, false)
     expect(getState().persistentKeys['users']).toBeUndefined()
   })
+
+  it('does not change persistentKeys when persist is omitted', () => {
+    getState().setApiState('users', { status: FetchStatus.IDLE }, true)
+    expect(getState().persistentKeys['users']).toBe(true)
+    // Update state without specifying persist — should NOT remove from persistentKeys
+    getState().setApiState('users', { data: 'updated' })
+    expect(getState().persistentKeys['users']).toBe(true)
+  })
 })
 
 // ── resetApiState ────────────────────────────────────────────
