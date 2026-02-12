@@ -12,6 +12,7 @@ import {
 import {
   ApiEndpoint,
   createApiComposer,
+  FetchStatus,
   useApiHandler,
   useLoadingStates
 } from 'zustand-api-manager'
@@ -47,6 +48,11 @@ const fetchPosts = () =>
     )
   })
 
+const updateUser = (user: User) =>
+  new Promise<{ data: User }>(resolve => {
+    setTimeout(() => resolve({ data: { ...user, username: user.username + ' (saved)' } }), 1500)
+  })
+
 // Typed API structure for composer -------------------------------------------
 
 interface MyApiStructure {
@@ -59,43 +65,122 @@ const useApi = createApiComposer<MyApiStructure>()
 // Components ------------------------------------------------------------------
 
 const BasicHandlerExample: React.FC = () => {
-  const { data, isIdle, isLoading, isError, handleApi } = useApiHandler<User>('user')
+  const { data, status, isIdle, isLoading, isError, fetchedAt, handleApi, resetApi } =
+    useApiHandler<User>('user')
 
-  const loadUser = () => {
-    void handleApi(() => fetchUser(7), {
-      persist: true
+  const loadUser = async () => {
+    const user = await handleApi(() => fetchUser(7), {
+      persist: true,
+      staleTime: 5000,
+      onSuccess: data => console.log('User loaded:', data.username)
     })
+    if (user) console.log('Returned user:', user.username)
   }
 
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>useApiHandler (user)</Text>
-      <Button title={isLoading ? 'Loading…' : 'Load user'} onPress={loadUser} disabled={isLoading} />
+      <Text style={styles.featureHint}>
+        staleTime · status · fetchedAt · resetApi · typed onSuccess
+      </Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Loading…' : 'Load user'}
+            onPress={loadUser}
+            disabled={isLoading}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="Reset" onPress={resetApi} disabled={isIdle} color="#999" />
+        </View>
+      </View>
       <Text style={styles.statusText}>
-        {isIdle && 'Status: idle'}
-        {isLoading && 'Status: loading'}
-        {isError && 'Status: error'}
-        {!isIdle && !isLoading && !isError && 'Status: success'}
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
       </Text>
-      <Text style={styles.mono}>
-        {data ? JSON.stringify(data, null, 2) : 'No data yet'}
+      {isError && <Text style={styles.errorText}>Error loading user</Text>}
+      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
+    </View>
+  )
+}
+
+const OptimisticUpdateExample: React.FC = () => {
+  const { data, isLoading, status, handleApi, resetApi } = useApiHandler<User>('optimistic-user')
+
+  const saveUser = () => {
+    const optimistic: User = { id: 42, username: 'optimistic-jane' }
+    void handleApi(() => updateUser(optimistic), {
+      optimisticData: optimistic,
+      onSuccess: data => console.log('Saved user:', data.username)
+    })
+  }
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Optimistic update</Text>
+      <Text style={styles.featureHint}>
+        Data appears instantly via optimisticData, then gets replaced by server response.
       </Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Saving…' : 'Save user'}
+            onPress={saveUser}
+            disabled={isLoading}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Reset"
+            onPress={resetApi}
+            disabled={status === FetchStatus.IDLE}
+            color="#999"
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>Status: {status}</Text>
+      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
     </View>
   )
 }
 
 const ComposerExample: React.FC = () => {
-  const { data: posts, isLoading, isError, handleApi } = useApi('getPosts')
+  const { data: posts, isLoading, isError, status, fetchedAt, handleApi, resetApi } =
+    useApi('getPosts')
 
   const loadPosts = () => {
-    void handleApi(() => fetchPosts())
+    void handleApi(() => fetchPosts(), {
+      staleTime: 10000
+    })
   }
 
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>createApiComposer (getPosts)</Text>
-      <Button title={isLoading ? 'Loading…' : 'Load posts'} onPress={loadPosts} disabled={isLoading} />
-      {isError && <Text style={[styles.statusText, styles.errorText]}>Error loading posts</Text>}
+      <Text style={styles.featureHint}>staleTime · resetApi · fetchedAt</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Loading…' : 'Load posts'}
+            onPress={loadPosts}
+            disabled={isLoading}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Reset"
+            onPress={resetApi}
+            disabled={status === FetchStatus.IDLE}
+            color="#999"
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
+      </Text>
+      {isError && <Text style={styles.errorText}>Error loading posts</Text>}
       {posts?.map(post => (
         <Text key={post.id} style={styles.listItem}>
           • {post.title}
@@ -129,12 +214,13 @@ const App: React.FC = () => {
         <Text style={styles.title}>Zustand API Manager – React Native Example</Text>
         <Text style={styles.subtitle}>
           Demo of <Text style={styles.code}>useApiHandler</Text>,{' '}
-          <Text style={styles.code}>useLoadingStates</Text> and{' '}
-          <Text style={styles.code}>createApiComposer</Text>.
+          <Text style={styles.code}>useLoadingStates</Text>,{' '}
+          <Text style={styles.code}>createApiComposer</Text>, and new features.
         </Text>
 
         <GlobalLoadingIndicator />
         <BasicHandlerExample />
+        <OptimisticUpdateExample />
         <ComposerExample />
       </ScrollView>
     </SafeAreaView>
@@ -198,15 +284,30 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 16,
     fontWeight: '600',
+    marginBottom: 2
+  },
+  featureHint: {
+    fontSize: 11,
+    color: '#999',
+    marginBottom: 10
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 8,
     marginBottom: 8
   },
+  buttonWrapper: {
+    flex: 0
+  },
   statusText: {
-    marginTop: 8,
+    marginTop: 4,
     marginBottom: 4,
+    fontSize: 13,
     color: '#555'
   },
   errorText: {
-    color: '#d4380d'
+    color: '#d4380d',
+    marginBottom: 4
   },
   mono: {
     fontFamily: 'Courier',
@@ -219,5 +320,3 @@ const styles = StyleSheet.create({
     fontSize: 14
   }
 })
-
-

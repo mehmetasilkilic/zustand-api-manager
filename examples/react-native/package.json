@@ -11,8 +11,10 @@
   "dependencies": {
     "expo": "^52.0.0",
     "expo-status-bar": "~2.0.0",
+    "immer": "^11.1.4",
     "react": "18.3.1",
     "react-native": "0.76.0",
+    "zustand": "^5.0.11",
     "zustand-api-manager": "file:../.."
   },
   "devDependencies": {
