@@ -13,6 +13,28 @@ import {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+/**
+ * The main Zustand store hook for managing API states.
+ *
+ * Uses `immer` middleware for immutable state updates and `persist` middleware
+ * for optional `localStorage` persistence. Only API keys explicitly marked with
+ * `persist: true` in their `ApiCallOptions` will survive page reloads.
+ *
+ * Supports middleware composition, global error handlers, abort signals,
+ * and automatic retries with exponential backoff.
+ *
+ * @example
+ * ```ts
+ * // Direct store access
+ * const { handleApi, addMiddleware, addErrorHandler } = useApiStore.getState()
+ *
+ * // Reactive usage in a React component
+ * const apiStates = useApiStore(state => state.apiStates)
+ * ```
+ *
+ * @see {@link useApiHandler} for a higher-level hook scoped to a single API key.
+ * @see {@link createApiComposer} for a fully type-safe approach with parameter/response typing.
+ */
 export const useApiStore = create<ApiStore>()(
   persist(
     immer((set, get) => ({
