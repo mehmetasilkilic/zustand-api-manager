@@ -44,6 +44,10 @@
     "type": "git",
     "url": "https://github.com/mehmetasilkilic/zustand-api-manager"
   },
+  "homepage": "https://github.com/mehmetasilkilic/zustand-api-manager#readme",
+  "bugs": {
+    "url": "https://github.com/mehmetasilkilic/zustand-api-manager/issues"
+  },
   "author": {
     "name": "Mehmet Asil Kılıç",
     "url": "https://github.com/mehmetasilkilic/"
@@ -69,10 +73,5 @@
     "immer": ">=10.0.0",
     "react": ">=17.0.0",
     "zustand": ">=5.0.0"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
   }
 }

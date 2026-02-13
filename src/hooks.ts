@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
 import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
@@ -110,5 +110,82 @@ export const useApiHandler = <T>(
     resetApi,
     invalidateApi
   }
+}
+
+/**
+ * A React hook that polls an API endpoint at a regular interval with automatic
+ * lifecycle management. Polling starts on mount (or when `enabled` becomes `true`)
+ * and stops on unmount (or when `enabled` becomes `false`).
+ *
+ * Uses refs internally so that the latest `apiCall` and `options` are always
+ * used on each tick without restarting the interval.
+ *
+ * If the previous poll is still in-flight when the next tick fires, the tick
+ * is skipped to prevent request stacking.
+ *
+ * @typeParam T - The expected response data type.
+ * @param key - The unique identifier for the API endpoint.
+ * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
+ * @param interval - The polling interval in milliseconds.
+ * @param options - Optional configuration for the API call, plus:
+ *   - `enabled` — If `false`, polling is paused. Defaults to `true`.
+ *   - `immediate` — If `true`, fires the first request immediately instead of waiting for the first interval.
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
+ * @returns An {@link ApiHandlerResult} containing the current state and control functions.
+ *
+ * @example
+ * ```tsx
+ * function NotificationBell() {
+ *   const { data, isLoading } = usePolling<Notification[]>(
+ *     'notifications',
+ *     () => fetchNotifications(),
+ *     10_000,
+ *     { immediate: true }
+ *   )
+ *
+ *   return <span>({data?.length ?? 0})</span>
+ * }
+ * ```
+ */
+export const usePolling = <T>(
+  key: string,
+  apiCall: () => Promise<{ data: T }>,
+  interval: number,
+  options?: ApiCallOptions<T> & { enabled?: boolean; immediate?: boolean },
+  store?: UseBoundStore<StoreApi<ApiStore>>
+): ApiHandlerResult<T> => {
+  const useStore = store ?? useApiStore
+  const handler = useApiHandler<T>(key, useStore)
+
+  // Keep apiCall and options fresh without restarting the polling interval.
+  const apiCallRef = useRef(apiCall)
+  apiCallRef.current = apiCall
+
+  const optionsRef = useRef(options)
+  optionsRef.current = options
+
+  const enabled = options?.enabled !== false
+
+  useEffect(() => {
+    if (!enabled) return
+
+    const tick = () => {
+      const current = useStore.getState().apiStates[key]
+      if (current?.status === FetchStatus.LOADING) return
+      const opts = optionsRef.current
+      const apiOptions: ApiCallOptions<T> = {
+        ...opts,
+        enabled: undefined,
+        immediate: undefined
+      } as ApiCallOptions<T>
+      useStore.getState().handleApi(key, () => apiCallRef.current(), apiOptions)
+    }
+
+    if (optionsRef.current?.immediate) tick()
+    const id = setInterval(tick, interval)
+    return () => clearInterval(id)
+  }, [key, interval, enabled, useStore])
+
+  return handler
 }
 

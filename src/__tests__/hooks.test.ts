@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
-import { useLoadingStates, useApiHandler } from '../hooks'
+import { useLoadingStates, useApiHandler, usePolling } from '../hooks'
+import { createApiStore } from '../index'
 import { FetchStatus } from '../types'
 
 beforeEach(() => {
@@ -237,3 +238,196 @@ describe('useApiHandler', () => {
   })
 })
 
+// ── usePolling ────────────────────────────────────────────────
+
+describe('usePolling', () => {
+  it('returns idle state initially', () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const { result, unmount } = renderHook(() =>
+      usePolling<string>('poll-test', apiCall, 1000)
+    )
+
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.data).toBeNull()
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('polls at the given interval', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'polled' }))
+
+    const { result, unmount } = renderHook(() =>
+      usePolling<string>('poll-interval', apiCall, 1000)
+    )
+
+    expect(apiCall).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+    expect(result.current.data).toBe('polled')
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('fires immediately when immediate is true', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'immediate' }))
+
+    const { unmount } = renderHook(() =>
+      usePolling<string>('poll-immediate', apiCall, 1000, { immediate: true })
+    )
+
+    // Should fire immediately without waiting
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('stops polling on unmount', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const { unmount } = renderHook(() =>
+      usePolling<string>('poll-unmount', apiCall, 1000)
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    // Should not have called again after unmount
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    vi.useRealTimers()
+  })
+
+  it('pauses polling when enabled is false', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const { unmount, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        usePolling<string>('poll-enabled', apiCall, 1000, { enabled }),
+      { initialProps: { enabled: false } }
+    )
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(apiCall).not.toHaveBeenCalled()
+
+    // Enable polling
+    rerender({ enabled: true })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('uses latest apiCall via ref without restarting interval', async () => {
+    vi.useFakeTimers()
+    let callVersion = 'v1'
+    const apiCallV1 = () => Promise.resolve({ data: callVersion })
+
+    const { result, rerender, unmount } = renderHook(
+      ({ apiCall }: { apiCall: () => Promise<{ data: string }> }) =>
+        usePolling<string>('poll-ref', apiCall, 1000),
+      { initialProps: { apiCall: apiCallV1 } }
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(result.current.data).toBe('v1')
+
+    // Change the apiCall reference and the version
+    callVersion = 'v2'
+    const apiCallV2 = () => Promise.resolve({ data: callVersion })
+    rerender({ apiCall: apiCallV2 })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(result.current.data).toBe('v2')
+
+    unmount()
+    vi.useRealTimers()
+  })
+})
+
+// ── createApiStore — bound hooks with renderHook ─────────────
+
+describe('createApiStore — bound hooks with renderHook', () => {
+  it('bound useApiHandler works as a React hook', async () => {
+    const store = createApiStore({ storageKey: 'bound-handler-test' })
+
+    const { result } = renderHook(() => store.useApiHandler<string>('test'))
+
+    expect(result.current.isIdle).toBe(true)
+
+    await act(async () => {
+      await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+    })
+
+    expect(result.current.isSuccess).toBe(true)
+    expect(result.current.data).toBe('hello')
+
+    // Should not appear in the default store
+    expect(useApiStore.getState().apiStates['test']).toBeUndefined()
+  })
+
+  it('bound useLoadingStates works as a React hook', () => {
+    const store = createApiStore({ storageKey: 'bound-loading-test' })
+
+    store.useStore.getState().setApiState('x', { status: FetchStatus.LOADING })
+
+    const { result } = renderHook(() => store.useLoadingStates('x'))
+    expect(result.current).toBe(true)
+
+    // Default store should not have this state
+    const { result: defaultResult } = renderHook(() => useLoadingStates('x'))
+    expect(defaultResult.current).toBe(false)
+  })
+
+  it('bound usePolling works as a React hook', async () => {
+    vi.useFakeTimers()
+    const store = createApiStore({ storageKey: 'bound-polling-test' })
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'polled' }))
+
+    const { result, unmount } = renderHook(() =>
+      store.usePolling<string>('poll-bound', apiCall, 1000, { immediate: true })
+    )
+
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.data).toBe('polled')
+
+    // Default store should not have this state
+    expect(useApiStore.getState().apiStates['poll-bound']).toBeUndefined()
+
+    unmount()
+    vi.useRealTimers()
+  })
+})

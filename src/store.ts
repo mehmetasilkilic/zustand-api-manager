@@ -1,17 +1,16 @@
-import { create } from 'zustand'
+import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import { initialApiState, STORAGE_KEY } from './constants'
 import {
-  ApiCallOptions,
-  ApiError,
-  ApiMiddlewareHandler,
-  ApiState,
-  ApiStore,
-  ApiStoreConfig,
-  FetchStatus
+  FetchStatus,
+  type ApiCallOptions,
+  type ApiError,
+  type ApiMiddlewareHandler,
+  type ApiState,
+  type ApiStore,
+  type ApiStoreConfig
 } from './types'
-import type { StoreApi, UseBoundStore } from 'zustand'
 
 /** Abort-aware sleep that rejects early when the signal fires. */
 const abortableSleep = (ms: number, signal?: AbortSignal) =>
@@ -65,7 +64,9 @@ const raceWithSignal = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T
           signal.removeEventListener('abort', onAbort)
           reject(error)
         }
-        // If already settled via abort, swallow the rejection to prevent unhandled errors
+        // Already settled via abort — swallow the rejection so the orphaned
+        // promise doesn't surface as an unhandled rejection.  The abort
+        // error was already delivered through the `onAbort` path above.
       }
     )
   })
@@ -114,6 +115,11 @@ const createTimeoutSignal = (
 const normalizeError = (error: unknown): ApiError => {
   const apiError: ApiError =
     error instanceof Error ? error : new Error('An unknown error occurred')
+  // Attach the original thrown value as `cause` so it's visible in stack traces
+  // when the thrown value is not an Error instance (e.g. a string or plain object).
+  if (!(error instanceof Error) && error !== undefined) {
+    ;(apiError as Error & { cause?: unknown }).cause = error
+  }
   if (error && typeof error === 'object' && 'status' in error) {
     apiError.status = error.status as number
   }
@@ -385,6 +391,11 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 
             // Return the data if the request succeeded and wasn't superseded
             if (isStale()) return undefined
+
+            // This request is the latest to complete — clean up the tracking
+            // entry so long-running apps don't accumulate stale counters.
+            delete activeRequests[key]
+
             const finalState = get().apiStates[key]
             if (finalState?.status === FetchStatus.SUCCESS) {
               return finalState.data as T
@@ -404,37 +415,14 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           return promise
         },
 
-        startPolling: <T>(
-          key: string,
-          apiCall: () => Promise<{ data: T }>,
-          interval: number,
-          options?: ApiCallOptions<T> & { immediate?: boolean }
-        ) => {
-          const { immediate, ...apiOptions } = options ?? {}
-          let polling = true
-
-          const tick = () => {
-            if (!polling) return
-            // Skip if the previous request is still in-flight
-            const current = get().apiStates[key]
-            if (current?.status === FetchStatus.LOADING) return
-            get().handleApi(key, apiCall, apiOptions as ApiCallOptions<T>)
-          }
-
-          if (immediate) tick()
-          const id = setInterval(tick, interval)
-          return () => {
-            polling = false
-            clearInterval(id)
-          }
-        },
-
         addMiddleware: middleware => {
           set(draft => {
             draft.middleware.push(middleware)
           })
           return () => {
             set(draft => {
+              // indexOf works correctly here because immer's proxy resolves
+              // the comparison against the original reference.
               const idx = draft.middleware.indexOf(middleware)
               if (idx !== -1) draft.middleware.splice(idx, 1)
             })

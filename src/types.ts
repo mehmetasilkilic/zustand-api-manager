@@ -326,39 +326,6 @@ export interface ApiStore {
   ) => Promise<T | undefined>
 
   /**
-   * Start polling an API endpoint at a regular interval using `setInterval`.
-   * Returns a function to stop polling. If the previous poll is still in-flight
-   * when the next tick fires, the tick is skipped to prevent request stacking.
-   *
-   * @typeParam T - The expected response data type.
-   * @param key - The unique identifier for the API endpoint.
-   * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
-   * @param interval - The polling interval in milliseconds.
-   * @param options - Optional configuration passed to each `handleApi` call.
-   * @param options.immediate - If `true`, fires the first request immediately instead of waiting for the first interval.
-   * @returns A function to stop polling.
-   *
-   * @example
-   * ```ts
-   * const stop = useApiStore.getState().startPolling(
-   *   'notifications',
-   *   () => fetchNotifications(),
-   *   10_000,
-   *   { immediate: true }
-   * )
-   *
-   * // Later, stop polling:
-   * stop()
-   * ```
-   */
-  startPolling: <T>(
-    key: string,
-    apiCall: () => Promise<{ data: T }>,
-    interval: number,
-    options?: ApiCallOptions<T> & { immediate?: boolean }
-  ) => () => void
-
-  /**
    * Register a middleware function that will be applied to all subsequent `handleApi` calls.
    * Middleware is composed in registration order (first registered = outermost wrapper).
    *

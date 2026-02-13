@@ -62,7 +62,7 @@ npm install zustand-api-manager zustand immer
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
 - `throwOnError` option — reject the promise instead of resolving to `undefined` on failure
 - `onSettled` callback — runs after both success and error for cleanup
-- `startPolling` store method for interval-based refetching with `immediate` option and overlap guard
+- `usePolling` hook for interval-based refetching with `immediate` option, `enabled` toggle, and overlap guard
 - `fetchedAt` timestamp tracking for every endpoint
 - SSR-safe (no `localStorage` access on the server)
 - Factory function for multiple fully isolated store instances with pre-bound hooks
@@ -217,7 +217,6 @@ The default singleton store for managing API states. Provides the following meth
 - `resetAll()` — Reset every API state and clear all persistence (useful for logout)
 - `invalidateAll()` — Mark every cached key as stale in a single state update
 - `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
-- `startPolling(key, apiCall, interval, options?)` — Poll an endpoint at a regular interval; returns a stop function
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
 
@@ -228,7 +227,7 @@ Factory function that creates an isolated store instance **with pre-bound conven
 ```typescript
 import { createApiStore } from "zustand-api-manager";
 
-const { useStore, useApiHandler, useLoadingStates, createApiComposer } =
+const { useStore, useApiHandler, useLoadingStates, usePolling, createApiComposer } =
   createApiStore({
     storageKey: "my-app-api", // localStorage key (default: 'api_store')
     storage: customStorage, // custom storage backend (optional)
@@ -276,42 +275,55 @@ A hook to check loading states for one or more API keys:
 
 Also accepts an optional store instance as the second argument.
 
-### `startPolling`
+### `usePolling`
 
-A store method that polls an API endpoint at a regular interval using `setInterval`. Returns a stop function. No React import required.
+A React hook for interval-based polling with automatic cleanup on unmount. Returns the same `ApiHandlerResult<T>` as `useApiHandler`.
 
 - `key` — The unique identifier for the API endpoint
 - `apiCall` — A function that returns a promise resolving to `{ data: T }`
 - `interval` — The polling interval in milliseconds
-- `options` — Optional `ApiCallOptions<T>` with an additional `immediate?: boolean` field
+- `options` — Optional `ApiCallOptions<T>` with additional fields:
+  - `immediate?: boolean` — Fire the first request immediately instead of waiting for the first interval tick
+  - `enabled?: boolean` — Toggle polling on/off (default `true`)
+- `store?` — Optional custom store instance
 
-If `immediate` is `true`, the first request fires immediately instead of waiting for the first interval tick. If the previous poll is still in-flight when the next tick fires, the tick is skipped to prevent request stacking.
-
-```typescript
-// Start polling — returns a stop function
-const stop = useApiStore.getState().startPolling(
-  "notifications",
-  () => fetchNotifications(),
-  10_000, // every 10 seconds
-  { immediate: true } // fire first request immediately
-);
-
-// Stop polling when done
-stop();
-```
-
-In a React component, clean up in a `useEffect`:
+If the previous poll is still in-flight when the next tick fires, the tick is skipped automatically to prevent request stacking.
 
 ```typescript
-useEffect(() => {
-  const stop = useApiStore.getState().startPolling(
-    "stats",
-    () => fetchStats(),
-    30_000,
+import { usePolling } from "zustand-api-manager";
+
+function NotificationBell() {
+  const { data, isLoading } = usePolling<Notification[]>(
+    "notifications",
+    () => fetchNotifications(),
+    10_000, // every 10 seconds
     { immediate: true }
   );
-  return stop; // cleanup on unmount
-}, []);
+
+  return <span>({data?.length ?? 0})</span>;
+}
+```
+
+You can conditionally enable/disable polling:
+
+```typescript
+function LiveFeed({ isActive }: { isActive: boolean }) {
+  const { data } = usePolling<FeedItem[]>(
+    "feed",
+    () => fetchFeed(),
+    5_000,
+    { enabled: isActive, immediate: true }
+  );
+
+  return <div>{data?.map((item) => <p key={item.id}>{item.text}</p>)}</div>;
+}
+```
+
+Also accepts a custom store instance as the last argument:
+
+```typescript
+const { useStore } = createApiStore();
+const { data } = usePolling<Stats>("stats", () => fetchStats(), 30_000, { immediate: true }, useStore);
 ```
 
 ### `createApiComposer`
@@ -591,38 +603,37 @@ Once the shared request completes, subsequent calls start a fresh request. Dedup
 
 ## Polling
 
-Use `startPolling` on the store to poll an endpoint at a regular interval. It returns a stop function. Use `{ immediate: true }` to fire the first request immediately instead of waiting for the first interval tick:
+Use the `usePolling` hook to poll an endpoint at a regular interval. Polling starts automatically when the component mounts and stops on unmount. Use `{ immediate: true }` to fire the first request immediately instead of waiting for the first interval tick:
 
 ```typescript
-const stop = useApiStore.getState().startPolling(
-  "notifications",
-  () => fetchNotifications(),
-  10_000, // every 10 seconds
-  { immediate: true }
-);
+import { usePolling } from "zustand-api-manager";
 
-// Stop when done
-stop();
+function NotificationBell() {
+  const { data } = usePolling<Notification[]>(
+    "notifications",
+    () => fetchNotifications(),
+    10_000, // every 10 seconds
+    { immediate: true }
+  );
+
+  return <span>({data?.length ?? 0})</span>;
+}
 ```
 
 If the previous poll is still in-flight when the next tick fires, the tick is skipped automatically to prevent request stacking.
 
-In a React component, use it inside `useEffect` for automatic cleanup:
+You can toggle polling on and off with the `enabled` option:
 
 ```typescript
-function NotificationBell() {
-  const { data } = useApiHandler<Notification[]>("notifications");
+function LiveDashboard({ isVisible }: { isVisible: boolean }) {
+  const { data } = usePolling<Stats>(
+    "stats",
+    () => fetchStats(),
+    5_000,
+    { enabled: isVisible, immediate: true }
+  );
 
-  useEffect(() => {
-    return useApiStore.getState().startPolling(
-      "notifications",
-      () => fetchNotifications(),
-      10_000,
-      { immediate: true }
-    );
-  }, []);
-
-  return <span>({data?.length ?? 0})</span>;
+  return <div>{data?.value}</div>;
 }
 ```
 

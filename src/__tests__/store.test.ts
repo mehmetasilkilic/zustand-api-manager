@@ -992,121 +992,6 @@ describe('resetApiStates', () => {
   })
 })
 
-// ── startPolling ─────────────────────────────────────────────
-
-describe('startPolling', () => {
-  it('calls handleApi at the specified interval', async () => {
-    vi.useFakeTimers()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
-
-    getState().startPolling('users', apiCall, 1000)
-
-    expect(apiCall).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(2)
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(3)
-
-    vi.useRealTimers()
-  })
-
-  it('returns a stop function that clears the interval', async () => {
-    vi.useFakeTimers()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
-
-    const stop = getState().startPolling('users', apiCall, 1000)
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    stop()
-
-    await vi.advanceTimersByTimeAsync(3000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    vi.useRealTimers()
-  })
-
-  it('passes options to each handleApi call', async () => {
-    vi.useFakeTimers()
-    const onSuccess = vi.fn()
-    const apiCall = () => Promise.resolve({ data: 'polled' })
-
-    const stop = getState().startPolling('users', apiCall, 1000, { onSuccess })
-
-    await vi.advanceTimersByTimeAsync(1000)
-
-    expect(onSuccess).toHaveBeenCalledWith('polled')
-
-    stop()
-    vi.useRealTimers()
-  })
-
-  it('fires immediately when immediate option is set', async () => {
-    vi.useFakeTimers()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
-
-    const stop = getState().startPolling('users', apiCall, 1000, { immediate: true })
-
-    // Should fire immediately without waiting for interval
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(2)
-
-    stop()
-    vi.useRealTimers()
-  })
-
-  it('does not fire immediately when immediate is not set', () => {
-    vi.useFakeTimers()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
-
-    const stop = getState().startPolling('users', apiCall, 1000)
-
-    expect(apiCall).not.toHaveBeenCalled()
-
-    stop()
-    vi.useRealTimers()
-  })
-
-  it('skips tick when previous request is still loading', async () => {
-    vi.useFakeTimers()
-    let resolveCall: (value: { data: string }) => void
-    const apiCall = vi.fn(
-      () =>
-        new Promise<{ data: string }>(resolve => {
-          resolveCall = resolve
-        })
-    )
-
-    getState().startPolling('users', apiCall, 1000)
-
-    // First tick — starts a request that stays pending
-    vi.advanceTimersByTime(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    // Second tick — should skip because status is LOADING
-    vi.advanceTimersByTime(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-
-    // Resolve the first call
-    resolveCall!({ data: 'ok' })
-    await vi.advanceTimersByTimeAsync(0) // flush microtasks
-
-    // Third tick — should fire because request completed
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(2)
-
-    vi.useRealTimers()
-  })
-})
-
 // ── store isolation ───────────────────────────────────────────
 
 describe('store isolation', () => {
@@ -1514,67 +1399,87 @@ describe('handleApi — timeout + retry interaction', () => {
   })
 })
 
-// ── startPolling — edge cases ────────────────────────────────
+// ── handleApi — onSettled with middleware crash ──────────────
 
-describe('startPolling — edge cases', () => {
-  it('stop() during an in-flight tick prevents further ticks', async () => {
-    vi.useFakeTimers()
-    let resolveCall: (value: { data: string }) => void
-    let callCount = 0
-    const apiCall = vi.fn(() => {
-      callCount++
-      if (callCount === 1) {
-        return new Promise<{ data: string }>(resolve => {
-          resolveCall = resolve
-        })
-      }
-      return Promise.resolve({ data: 'ok' })
-    })
+describe('handleApi — onSettled with middleware crash', () => {
+  it('calls onSettled even when middleware throws', async () => {
+    const onSettled = vi.fn()
+    const mw: ApiMiddleware = () => async () => {
+      throw new Error('middleware-crash')
+    }
+    getState().addMiddleware(mw)
 
-    const stop = getState().startPolling('users', apiCall, 1000)
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await expect(
+      getState().handleApi('users', apiCall, { onSettled })
+    ).rejects.toThrow('middleware-crash')
 
-    // First tick fires
-    vi.advanceTimersByTime(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
+    expect(onSettled).toHaveBeenCalledOnce()
+  })
+})
 
-    // Stop while first request is in-flight
-    stop()
+// ── activeRequests cleanup ───────────────────────────────────
 
-    // Resolve the in-flight request
-    resolveCall!({ data: 'ok' })
-    await vi.advanceTimersByTimeAsync(0)
+describe('activeRequests cleanup', () => {
+  it('subsequent requests work after cleanup of previous request tracking', async () => {
+    const apiCall1 = () => Promise.resolve({ data: 'first' })
+    const apiCall2 = () => Promise.resolve({ data: 'second' })
+    const apiCall3 = () => Promise.resolve({ data: 'third' })
 
-    // Advance more ticks — none should fire
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
+    await getState().handleApi('users', apiCall1)
+    expect(getState().apiStates['users'].data).toBe('first')
 
-    vi.useRealTimers()
+    await getState().handleApi('users', apiCall2)
+    expect(getState().apiStates['users'].data).toBe('second')
+
+    await getState().handleApi('users', apiCall3)
+    expect(getState().apiStates['users'].data).toBe('third')
   })
 
-  it('handles errors in polled requests without stopping', async () => {
-    vi.useFakeTimers()
-    let callCount = 0
-    const apiCall = vi.fn(() => {
-      callCount++
-      if (callCount === 1) return Promise.reject(new Error('transient'))
-      return Promise.resolve({ data: 'recovered' })
-    })
+  it('race condition still works after cleanup', async () => {
+    let resolveFirst: (value: { data: string }) => void
+    const firstCall = () =>
+      new Promise<{ data: string }>(resolve => {
+        resolveFirst = resolve
+      })
+    const secondCall = () => Promise.resolve({ data: 'second' })
+    const thirdCall = () => Promise.resolve({ data: 'third' })
 
-    const stop = getState().startPolling('users', apiCall, 1000)
+    // First request (will be stale)
+    const firstPromise = getState().handleApi('users', firstCall)
 
-    // First tick — fails
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(1)
-    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    // Second request supersedes
+    await getState().handleApi('users', secondCall)
+    expect(getState().apiStates['users'].data).toBe('second')
 
-    // Second tick — succeeds
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(apiCall).toHaveBeenCalledTimes(2)
-    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
-    expect(getState().apiStates['users'].data).toBe('recovered')
+    // Resolve stale first
+    resolveFirst!({ data: 'first' })
+    await firstPromise
+    expect(getState().apiStates['users'].data).toBe('second')
 
-    stop()
-    vi.useRealTimers()
+    // Third request should work normally after cleanup
+    await getState().handleApi('users', thirdCall)
+    expect(getState().apiStates['users'].data).toBe('third')
+  })
+})
+
+// ── normalizeError — cause ───────────────────────────────────
+
+describe('normalizeError — cause', () => {
+  it('attaches cause when non-Error value is thrown', async () => {
+    const apiCall = () => Promise.reject({ custom: 'error-object' })
+    await getState().handleApi('users', apiCall)
+    const error = getState().apiStates['users'].error!
+    expect(error.message).toBe('An unknown error occurred')
+    expect((error as Error & { cause?: unknown }).cause).toEqual({ custom: 'error-object' })
+  })
+
+  it('does not attach cause when Error instance is thrown', async () => {
+    const apiCall = () => Promise.reject(new Error('real error'))
+    await getState().handleApi('users', apiCall)
+    const error = getState().apiStates['users'].error!
+    expect(error.message).toBe('real error')
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined()
   })
 })
 
