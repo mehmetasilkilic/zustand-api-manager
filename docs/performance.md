@@ -37,14 +37,14 @@ function UserProfile() {
 All hooks return stable function references:
 
 ```typescript
-// ✅ handleApi is stable - safe in dependencies
-const { handleApi } = useApiQuery('user')
+// ✅ query is stable - safe in dependencies
+const { query } = useApiQuery('user')
 
 useEffect(() => {
-  handleApi(fetchUser)
-}, [handleApi]) // Won't cause infinite loop
+  query(fetchUser)
+}, [query]) // Won't cause infinite loop
 
-// Same for mutate, resetApi, invalidateApi, etc.
+// Same for mutate, reset(), invalidate(), etc.
 ```
 
 ### Avoid Unnecessary API Calls
@@ -54,13 +54,13 @@ Use `staleTime` to prevent redundant fetches:
 ```typescript
 // ✅ Good - caches for 5 minutes
 useEffect(() => {
-  handleApi(fetchUser, { staleTime: 300_000 })
-}, [handleApi])
+  query(fetchUser, { staleTime: 300_000 })
+}, [query])
 
 // ❌ Bad - fetches every render
 useEffect(() => {
-  handleApi(fetchUser) // no staleTime
-}, [handleApi])
+  query(fetchUser) // no staleTime
+}, [query])
 ```
 
 ---
@@ -73,13 +73,13 @@ Balance freshness with performance:
 
 ```typescript
 // User profile - rarely changes
-handleApi(fetchProfile, { staleTime: 600_000 }) // 10 minutes
+query(fetchProfile, { staleTime: 600_000 }) // 10 minutes
 
 // Notification count - changes frequently
-handleApi(fetchNotifications, { staleTime: 10_000 }) // 10 seconds
+query(fetchNotifications, { staleTime: 10_000 }) // 10 seconds
 
 // Real-time data - always fresh
-handleApi(fetchLiveData) // no staleTime
+query(fetchLiveData) // no staleTime
 ```
 
 ### Use revalidateOnStale for Better UX
@@ -87,7 +87,7 @@ handleApi(fetchLiveData) // no staleTime
 Return stale data immediately, refetch in background:
 
 ```typescript
-handleApi(fetchUser, {
+query(fetchUser, {
   staleTime: 60_000,
   revalidateOnStale: true // Show stale data instantly, update later
 })
@@ -126,7 +126,7 @@ const { mutate } = useApiMutation('updateUser', updateUser)
 await mutate(data, {
   onSuccess: () => {
     // Invalidate affected queries
-    useApiStore.getState().invalidateApis([
+    useApiStore.getState().invalidate()s([
       'user',
       'user-list',
       'user-settings'
@@ -149,17 +149,17 @@ Prevent duplicate concurrent requests:
 ```typescript
 // Multiple components request same data
 function ComponentA() {
-  const { handleApi } = useApiQuery('user')
+  const { query } = useApiQuery('user')
   useEffect(() => {
-    handleApi(fetchUser, { dedupe: true })
-  }, [handleApi])
+    query(fetchUser, { dedupe: true })
+  }, [query])
 }
 
 function ComponentB() {
-  const { handleApi } = useApiQuery('user')
+  const { query } = useApiQuery('user')
   useEffect(() => {
-    handleApi(fetchUser, { dedupe: true }) // Shares request with A
-  }, [handleApi])
+    query(fetchUser, { dedupe: true }) // Shares request with A
+  }, [query])
 }
 ```
 
@@ -169,12 +169,12 @@ Use batch methods for multiple updates:
 
 ```typescript
 // ✅ Good - single state update
-useApiStore.getState().invalidateApis(['users', 'posts', 'comments'])
+useApiStore.getState().invalidate()s(['users', 'posts', 'comments'])
 
 // ❌ Bad - multiple state updates
-useApiStore.getState().invalidateApi('users')
-useApiStore.getState().invalidateApi('posts')
-useApiStore.getState().invalidateApi('comments')
+useApiStore.getState().invalidate()('users')
+useApiStore.getState().invalidate()('posts')
+useApiStore.getState().invalidate()('comments')
 ```
 
 ### Abort Unnecessary Requests
@@ -190,7 +190,7 @@ function Search() {
     controllerRef.current?.abort()
     controllerRef.current = new AbortController()
 
-    handleApi(() => searchApi(query), {
+    query(() => searchApi(query), {
       signal: controllerRef.current.signal
     })
   }
@@ -204,7 +204,7 @@ function Search() {
 Don't wait forever for slow requests:
 
 ```typescript
-handleApi(fetchData, {
+query(fetchData, {
   timeout: 10_000, // 10 second timeout
   onError: (error) => {
     if (error.code === 'TIMEOUT') {
@@ -224,7 +224,7 @@ Only import what you need:
 
 ```typescript
 // ✅ Good - tree-shakeable
-import { useApiHandler, useApiMutation } from 'zustand-api-manager'
+import { useApiQuery, useApiMutation } from 'zustand-api-manager'
 
 // ❌ Bad - imports everything
 import * as ApiManager from 'zustand-api-manager'
@@ -266,9 +266,9 @@ Reset state when component unmounts:
 useEffect(() => {
   return () => {
     // Clean up on unmount
-    resetApi()
+    reset()()
   }
-}, [resetApi])
+}, [reset()])
 ```
 
 ### Remove Unused Keys
@@ -279,7 +279,7 @@ Don't accumulate stale keys:
 // Clean up after feature is removed
 useEffect(() => {
   return () => {
-    useApiStore.getState().resetApiState('temporary-feature')
+    useApiStore.getState().reset()State('temporary-feature')
   }
 }, [])
 ```
@@ -290,8 +290,8 @@ Only persist what's necessary:
 
 ```typescript
 // ✅ Good - selective persistence
-handleApi(fetchUser, { persist: true }) // Important
-handleApi(fetchTemp, { persist: false }) // Temporary
+query(fetchUser, { persist: true }) // Important
+query(fetchTemp, { persist: false }) // Temporary
 
 // ❌ Bad - persist everything
 configureApiStore({ defaultPersist: true })
@@ -375,18 +375,18 @@ Optimized component:
 
 ```typescript
 function OptimizedUserList() {
-  const { data, isLoading, handleApi } = useApiQuery<User[]>('users')
+  const { data, isLoading, query } = useApiQuery<User[]>('users')
   const { prefetch } = usePrefetch()
 
   useEffect(() => {
-    handleApi(fetchUsers, {
+    query(fetchUsers, {
       staleTime: 300_000, // Cache 5 minutes
       revalidateOnStale: true, // Return stale, refetch background
       dedupe: true, // Share with other components
       persist: true, // Survive reload
       timeout: 10_000 // Don't wait forever
     })
-  }, [handleApi])
+  }, [query])
 
   const handleHover = (userId: number) => {
     // Prefetch details on hover

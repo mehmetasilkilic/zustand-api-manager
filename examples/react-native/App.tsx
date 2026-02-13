@@ -135,11 +135,10 @@ const SecondStoreLoading: React.FC = () => {
 }
 
 const BasicHandlerExample: React.FC = () => {
-  const { data, status, isIdle, isLoading, fetchedAt, handleApi, resetApi } =
-    useApiQuery<User>('user')
+  const { data, status, isIdle, isLoading, fetchedAt, query, reset } = useApiQuery<User>('user')
 
   const loadUser = async () => {
-    const user = await handleApi(() => fetchUser(7), {
+    const user = await query(() => fetchUser(7), {
       persist: true,
       staleTime: 5000,
       onSuccess: d => console.log('User loaded:', d.username)
@@ -150,7 +149,7 @@ const BasicHandlerExample: React.FC = () => {
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>useApiQuery — default store</Text>
-      <Text style={styles.featureHint}>staleTime · persist · fetchedAt · resetApi</Text>
+      <Text style={styles.featureHint}>staleTime · persist · fetchedAt · reset</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -160,7 +159,7 @@ const BasicHandlerExample: React.FC = () => {
           />
         </View>
         <View style={styles.buttonWrapper}>
-          <Button title="Reset" onPress={resetApi} disabled={isIdle} color="#999" />
+          <Button title="Reset" onPress={reset} disabled={isIdle} color="#999" />
         </View>
       </View>
       <Text style={styles.statusText}>
@@ -174,19 +173,20 @@ const BasicHandlerExample: React.FC = () => {
 
 const UseEffectExample: React.FC = () => {
   const [userId, setUserId] = useState(1)
-  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    useApiQuery<User>('effect-user')
+  const { data, isLoading, status, fetchedAt, query, reset } = useApiQuery<User>('effect-user')
 
-  // handleApi is a stable reference — safe to include in useEffect deps.
+  // query is a stable reference — safe to include in useEffect deps.
   // This effect only re-runs when userId changes, not on every render.
   useEffect(() => {
-    handleApi(() => fetchUser(userId), { staleTime: 5000 })
-  }, [userId, handleApi])
+    query(() => fetchUser(userId), { staleTime: 5000 })
+  }, [userId, query])
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>useEffect with handleApi — stable refs</Text>
-      <Text style={styles.featureHint}>handleApi in useEffect deps · staleTime · no infinite loops</Text>
+      <Text style={styles.cardTitle}>useEffect with query — stable refs</Text>
+      <Text style={styles.featureHint}>
+        query in useEffect deps · staleTime · no infinite loops
+      </Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -197,7 +197,7 @@ const UseEffectExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Reset"
-            onPress={resetApi}
+            onPress={reset}
             disabled={status === FetchStatus.IDLE}
             color="#999"
           />
@@ -214,11 +214,11 @@ const UseEffectExample: React.FC = () => {
 }
 
 const OptimisticUpdateExample: React.FC = () => {
-  const { data, isLoading, status, handleApi, resetApi } = useApiQuery<User>('optimistic-user')
+  const { data, isLoading, status, query, reset } = useApiQuery<User>('optimistic-user')
 
   const saveUser = () => {
     const optimistic: User = { id: 42, username: 'optimistic-jane' }
-    void handleApi(() => updateUser(optimistic), {
+    void query(() => updateUser(optimistic), {
       optimisticData: optimistic,
       onSuccess: d => console.log('Saved user:', d.username)
     })
@@ -239,7 +239,7 @@ const OptimisticUpdateExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Reset"
-            onPress={resetApi}
+            onPress={reset}
             disabled={status === FetchStatus.IDLE}
             color="#999"
           />
@@ -252,8 +252,7 @@ const OptimisticUpdateExample: React.FC = () => {
 }
 
 const ComposerExample: React.FC = () => {
-  const { data: posts, isLoading, isError, status, fetchedAt, query, reset } =
-    useApi('getPosts')
+  const { data: posts, isLoading, isError, status, fetchedAt, query, reset } = useApi('getPosts')
 
   const loadPosts = () => {
     void query(() => fetchPosts(), { staleTime: 10000 })
@@ -295,8 +294,15 @@ const ComposerExample: React.FC = () => {
 }
 
 const SecondStoreExample: React.FC = () => {
-  const { data: comments, isLoading, status, fetchedAt, query, reset, invalidate } =
-    useSecondApi('getComments')
+  const {
+    data: comments,
+    isLoading,
+    status,
+    fetchedAt,
+    query,
+    reset,
+    invalidate
+  } = useSecondApi('getComments')
 
   const loadComments = () => {
     void query(() => fetchComments(), { staleTime: 8000 })
@@ -346,11 +352,10 @@ const SecondStoreExample: React.FC = () => {
 }
 
 const SecondStoreHandlerExample: React.FC = () => {
-  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    secondStore.useApiQuery<User>('user')
+  const { data, isLoading, status, fetchedAt, query, reset } = secondStore.useApiQuery<User>('user')
 
   const loadUser = async () => {
-    const user = await handleApi(() => fetchUser(99), { staleTime: 5000 })
+    const user = await query(() => fetchUser(99), { staleTime: 5000 })
     if (user) console.log('[Second store] user:', user.username)
   }
 
@@ -370,7 +375,7 @@ const SecondStoreHandlerExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Reset"
-            onPress={resetApi}
+            onPress={reset}
             disabled={status === FetchStatus.IDLE}
             color="#999"
           />
@@ -422,8 +427,8 @@ const App: React.FC = () => {
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Zustand API Manager — Multi-Store</Text>
         <Text style={styles.subtitle}>
-          Two isolated stores, stable refs in useEffect, and the same "user" key proving
-          store isolation.
+          Two isolated stores, stable query refs in useEffect, and the same "user" key proving store
+          isolation.
         </Text>
 
         <GlobalLoadingIndicator />

@@ -16,7 +16,7 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * {@link ApiQueryEndpoint} or {@link ApiMutationEndpoint} types. The returned
  * hook automatically infers parameter and response types for each endpoint.
  *
- * For queries, the hook returns `handleApi` for manual triggering.
+ * For queries, the hook returns `query` for manual triggering.
  * For mutations, the hook returns `mutate` with the mutation function pre-bound.
  *
  * @typeParam TApiStructure - An interface where each key maps to an endpoint type.
@@ -40,11 +40,11 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  *
  * // Query usage
  * function UserProfile({ userId }: { userId: number }) {
- *   const { data, isLoading, handleApi } = useApi('getUser')
+ *   const { data, isLoading, query } = useApi('getUser')
  *
  *   useEffect(() => {
- *     handleApi({ id: userId }, (params) => api.getUser(params))
- *   }, [userId, handleApi])
+ *     query({ id: userId }, (params) => api.getUser(params))
+ *   }, [userId, query])
  *
  *   return <div>{data?.name}</div>
  * }

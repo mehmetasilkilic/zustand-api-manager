@@ -31,13 +31,13 @@ const api = {
 }
 
 export default function FeatureModule() {
-  const { data, isLoading, handleApi } = useApiQuery<FeatureData>('featureData')
+  const { data, isLoading, query } = useApiQuery<FeatureData>('featureData')
   const isAnyLoading = useLoadingStates()
   const { prefetch } = usePrefetch()
 
   useEffect(() => {
     // Load initial data
-    handleApi(() => api.getFeatureData(1), {
+    query(() => api.getFeatureData(1), {
       persist: true,
       staleTime: 300_000 // Fresh for 5 minutes
     })
@@ -46,7 +46,7 @@ export default function FeatureModule() {
     prefetch('featureData-2', () => api.getFeatureData(2), {
       staleTime: 300_000
     })
-  }, [handleApi, prefetch])
+  }, [query, prefetch])
 
   // This component's state is completely isolated from other stores
   // You can reset just this feature's state without affecting global state

@@ -25,12 +25,12 @@ Common issues and their solutions.
 ```typescript
 // ❌ Wrong - store method doesn't subscribe
 const handleClick = () => {
-  useApiStore.getState().handleApi('users', fetchUsers)
+  useApiStore.getState().query('users', fetchUsers)
 }
 
 // ✅ Correct - use the hook
-const { handleApi } = useApiQuery('users')
-const handleClick = () => handleApi(fetchUsers)
+const { query } = useApiQuery('users')
+const handleClick = () => query(fetchUsers)
 ```
 
 ### Data Persisted Incorrectly
@@ -41,13 +41,13 @@ const handleClick = () => handleApi(fetchUsers)
 
 ```typescript
 // Persist
-handleApi(fetchUser, { persist: true })
+query(fetchUser, { persist: true })
 
 // Don't persist
-handleApi(fetchUser, { persist: false })
+query(fetchUser, { persist: false })
 
 // No change to persistence
-handleApi(fetchUser) // or { persist: undefined }
+query(fetchUser) // or { persist: undefined }
 ```
 
 ---
@@ -58,17 +58,17 @@ handleApi(fetchUser) // or { persist: undefined }
 
 **Problem**: `useEffect` causes infinite requests.
 
-**Solution**: `handleApi` is stable - include it in dependencies:
+**Solution**: `query` is stable - include it in dependencies:
 
 ```typescript
-// ✅ Correct - handleApi is stable
+// ✅ Correct - query is stable
 useEffect(() => {
-  handleApi(fetchUser)
-}, [handleApi])
+  query(fetchUser)
+}, [query])
 
 // ❌ Wrong - missing dependency
 useEffect(() => {
-  handleApi(fetchUser)
+  query(fetchUser)
 }, []) // ESLint warning
 ```
 
@@ -101,12 +101,12 @@ const { mutate } = useApiMutation('updateUser', updateUser)
 
 await mutate(data, {
   onSuccess: () => {
-    useApiStore.getState().invalidateApi('user')
+    useApiStore.getState().invalidate()('user')
   }
 })
 
 // Or use shorter staleTime
-handleApi(fetchUser, { staleTime: 5_000 })
+query(fetchUser, { staleTime: 5_000 })
 ```
 
 ### Cache Not Working
@@ -118,10 +118,10 @@ handleApi(fetchUser, { staleTime: 5_000 })
 ```typescript
 // ✅ Consistent key
 const KEY = 'user'
-handleApi(fetchUser, { staleTime: 60_000 })
+query(fetchUser, { staleTime: 60_000 })
 
 // ❌ Different keys = different cache
-handleApi(fetchUser, { staleTime: 60_000 }) // uses random key each time
+query(fetchUser, { staleTime: 60_000 }) // uses random key each time
 ```
 
 ---
@@ -151,9 +151,9 @@ const { data } = useApiQuery('user') // data is unknown
 ```typescript
 interface User { name: string }
 
-const { handleApi } = useApiQuery<User>('user')
+const { query } = useApiQuery<User>('user')
 
-handleApi(fetchUser, {
+query(fetchUser, {
   // ✅ Correct - data is typed as User
   onSuccess: (data) => console.log(data.name),
 
@@ -226,11 +226,11 @@ const storage = typeof window !== 'undefined'
 
 ```typescript
 // ❌ Can cause hydration issues
-handleApi(fetchUser, { persist: true })
+query(fetchUser, { persist: true })
 
 // ✅ Better - only persist after user action
 const handleSave = () => {
-  handleApi(saveUser, { persist: true })
+  query(saveUser, { persist: true })
 }
 ```
 
@@ -247,7 +247,7 @@ const handleSave = () => {
 ```typescript
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-const { useApiHandler } = createApiStore({
+const { useApiQuery } = createApiStore({
   storage: {
     getItem: (name) => AsyncStorage.getItem(name),
     setItem: (name, value) => AsyncStorage.setItem(name, value),

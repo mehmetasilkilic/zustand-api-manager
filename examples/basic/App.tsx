@@ -17,10 +17,10 @@ const api = {
 }
 
 export default function App() {
-  const { data, isLoading, isError, error, handleApi, resetApi } = useApiQuery<User>('user')
+  const { data, isLoading, isError, error, query, reset } = useApiQuery<User>('user')
 
   useEffect(() => {
-    handleApi(() => api.getUser(1), {
+    query(() => api.getUser(1), {
       persist: true, // Cache in localStorage
       staleTime: 60_000, // Fresh for 1 minute
       retry: 2, // Retry twice on failure
@@ -28,7 +28,7 @@ export default function App() {
         console.log('User loaded:', user.name)
       }
     })
-  }, [handleApi])
+  }, [query])
 
   if (isLoading) return <div>Loading...</div>
   if (isError) return <div>Error: {error?.message}</div>
@@ -42,7 +42,7 @@ export default function App() {
           <p>Email: {data.email}</p>
         </div>
       )}
-      <button onClick={resetApi}>Reset</button>
+      <button onClick={reset}>Reset</button>
     </div>
   )
 }

@@ -18,7 +18,7 @@ import type {
   ApiCallOptions,
   ApiComposerConfig,
   ApiStoreConfig,
-  ApiHandlerResult,
+  ApiQueryResult,
   ApiMutationResult
 } from './types'
 
@@ -41,7 +41,7 @@ import type {
  * })
  *
  * // Use bound hooks directly — no store argument needed
- * const { data, handleApi } = useApiQuery<User>('getUser')
+ * const { data, query } = useApiQuery<User>('getUser')
  * const isLoading = useLoadingStates('getUser')
  * ```
  */
@@ -49,14 +49,14 @@ export function createApiStore(config?: ApiStoreConfig) {
   const { useStore } = createStoreInternal(config)
   return {
     useStore,
-    useApiQuery: <T>(key: string): ApiHandlerResult<T> => useApiQueryFn<T>(key, useStore),
+    useApiQuery: <T>(key: string): ApiQueryResult<T> => useApiQueryFn<T>(key, useStore),
     useLoadingStates: (keys?: string | string[]): boolean => useLoadingStatesFn(keys, useStore),
     usePolling: <T>(
       key: string,
       apiCall: () => Promise<{ data: T }>,
       interval: number,
       options?: ApiCallOptions<T> & { enabled?: boolean; immediate?: boolean }
-    ): ApiHandlerResult<T> => usePollingFn<T>(key, apiCall, interval, options, useStore),
+    ): ApiQueryResult<T> => usePollingFn<T>(key, apiCall, interval, options, useStore),
     useApiMutation: <T, V = void>(
       key: string,
       mutationFn: (variables: V) => Promise<{ data: T }>
