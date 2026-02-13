@@ -79,44 +79,55 @@ const getSafeStorage = (): StateStorage => {
   return { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 }
 
-/**
- * Internal counter map for race-condition protection.
- * Tracks the latest request ID per API key so stale responses are discarded.
- */
-const activeRequests: Record<string, number> = {}
-
-/** Tracks in-flight promises per key for request deduplication. */
-const pendingRequests = new Map<string, Promise<unknown>>()
-
-/**
- * Dev-time registry that maps each API key to the store instance that owns it.
- * Warns when the same key is used across different store instances to prevent
- * accidental collisions in the shared `activeRequests` / `pendingRequests` maps.
- */
-const keyOwnerRegistry =
-  process.env.NODE_ENV !== 'production' ? new Map<string, object>() : null
-
-/** Warns once per key if a different store tries to claim it. */
-const warnedKeys = process.env.NODE_ENV !== 'production' ? new Set<string>() : null
-
-const checkKeyOwnership = (key: string, storeRef: object) => {
-  if (!keyOwnerRegistry || !warnedKeys) return
-  const owner = keyOwnerRegistry.get(key)
-  if (owner && owner !== storeRef && !warnedKeys.has(key)) {
-    warnedKeys.add(key)
-    console.warn(
-      `[zustand-api-manager] Key "${key}" is already used by another store instance. ` +
-        `Using the same key across different stores will cause shared race-condition tracking ` +
-        `and deduplication to interfere. Use unique key names per store or use the singleton store.`
-    )
+/** Creates a combined AbortSignal that respects both a user signal and a timeout duration. */
+const createTimeoutSignal = (
+  timeout: number | undefined,
+  userSignal: AbortSignal | undefined
+): { signal: AbortSignal | undefined; cleanup: () => void; isTimedOut: () => boolean } => {
+  if (timeout == null || timeout <= 0) {
+    return { signal: userSignal, cleanup: () => {}, isTimedOut: () => false }
   }
-  keyOwnerRegistry.set(key, storeRef)
+
+  let timedOut = false
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeout)
+
+  if (userSignal) {
+    if (userSignal.aborted) {
+      controller.abort()
+    } else {
+      userSignal.addEventListener('abort', () => controller.abort(), { once: true })
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timeoutId),
+    isTimedOut: () => timedOut
+  }
 }
 
-const releaseKeyOwnership = (key: string) => {
-  if (!keyOwnerRegistry || !warnedKeys) return
-  keyOwnerRegistry.delete(key)
-  warnedKeys.delete(key)
+/** Normalizes an unknown thrown value into an ApiError with optional status/code. */
+const normalizeError = (error: unknown): ApiError => {
+  const apiError: ApiError =
+    error instanceof Error ? error : new Error('An unknown error occurred')
+  if (error && typeof error === 'object' && 'status' in error) {
+    apiError.status = error.status as number
+  }
+  if (error && typeof error === 'object' && 'code' in error) {
+    apiError.code = error.code as string
+  }
+  return apiError
+}
+
+/** Creates an abort/timeout ApiError based on whether a timeout triggered the abort. */
+const createAbortError = (timedOut: boolean): ApiError => {
+  const error: ApiError = new Error(timedOut ? 'Request timed out' : 'Aborted')
+  error.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
+  return error
 }
 
 /**
@@ -140,8 +151,11 @@ const releaseKeyOwnership = (key: string) => {
 export function createApiStore(config: ApiStoreConfig = {}) {
   const { storageKey = STORAGE_KEY, storage: customStorage } = config
 
-  /** Stable identity object used to track key ownership for this store instance. */
-  const storeRef = {}
+  /** Per-store counter map for race-condition protection. */
+  const activeRequests: Record<string, number> = {}
+
+  /** Per-store in-flight promises for request deduplication. */
+  const pendingRequests = new Map<string, Promise<unknown>>()
 
   const useStore = create<ApiStore>()(
     persist(
@@ -154,7 +168,6 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         setApiState: <T>(key: string, state: Partial<ApiState<T>>, shouldPersist?: boolean) =>
           set(draft => {
             if (!draft.apiStates[key]) {
-              checkKeyOwnership(key, storeRef)
               draft.apiStates[key] = { ...initialApiState } as ApiState<T>
             }
 
@@ -170,10 +183,8 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           }),
 
         resetApiState: (key: string) => {
-          // Clean up race-condition counter and pending dedup to prevent memory leak
           delete activeRequests[key]
           pendingRequests.delete(key)
-          releaseKeyOwnership(key)
           set(draft => {
             delete draft.apiStates[key]
             delete draft.persistentKeys[key]
@@ -200,7 +211,6 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           for (const key of keys) {
             delete activeRequests[key]
             pendingRequests.delete(key)
-            releaseKeyOwnership(key)
           }
           set(draft => {
             for (const key of keys) {
@@ -210,12 +220,30 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           })
         },
 
+        resetAll: () => {
+          const keys = Object.keys(get().apiStates)
+          for (const key of keys) {
+            delete activeRequests[key]
+            pendingRequests.delete(key)
+          }
+          set(draft => {
+            draft.apiStates = {}
+            draft.persistentKeys = {} as Record<string, boolean>
+          })
+        },
+
+        invalidateAll: () =>
+          set(draft => {
+            for (const key of Object.keys(draft.apiStates)) {
+              draft.apiStates[key].fetchedAt = null
+            }
+          }),
+
         handleApi: <T>(
           key: string,
           apiCall: () => Promise<{ data: T }>,
           options: ApiCallOptions<T> = {}
         ): Promise<T | undefined> => {
-          checkKeyOwnership(key, storeRef)
           const { staleTime, dedupe } = options
 
           // Cache / staleTime: skip fetch if data is fresh enough
@@ -238,33 +266,11 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 
           const promise = (async (): Promise<T | undefined> => {
             const { setApiState } = get()
-            const { retry = 0, optimisticData, timeout } = options
+            const { retry = 0, optimisticData } = options
 
-            // Timeout setup: create a combined signal that respects both user signal and timeout
-            let timeoutId: ReturnType<typeof setTimeout> | undefined
-            let timedOut = false
-            let effectiveOptions = options
-
-            if (timeout != null && timeout > 0) {
-              const timeoutController = new AbortController()
-              timeoutId = setTimeout(() => {
-                timedOut = true
-                timeoutController.abort()
-              }, timeout)
-
-              // Forward user signal abort to timeout controller
-              if (options.signal) {
-                if (options.signal.aborted) {
-                  timeoutController.abort()
-                } else {
-                  options.signal.addEventListener('abort', () => timeoutController.abort(), {
-                    once: true
-                  })
-                }
-              }
-
-              effectiveOptions = { ...options, signal: timeoutController.signal }
-            }
+            const timeout = createTimeoutSignal(options.timeout, options.signal)
+            const effectiveSignal = timeout.signal
+            const effectiveOptions = { ...options, signal: effectiveSignal }
 
             // Race condition protection: increment the counter for this key
             const requestId = (activeRequests[key] = (activeRequests[key] ?? 0) + 1)
@@ -282,7 +288,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
               )
             }
 
-            const handleError = (error: ApiError) => {
+            const onError = (error: ApiError) => {
               if (isStale()) return
               // Roll back to previous data when optimistic update was used
               const rollbackData = optimisticData !== undefined ? previousData : null
@@ -311,11 +317,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 
               for (let attempt = 0; attempt < maxAttempts; attempt++) {
                 if (opts.signal?.aborted) {
-                  const abortError: ApiError = new Error(
-                    timedOut ? 'Request timed out' : 'Aborted'
-                  )
-                  abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
-                  handleError(abortError)
+                  onError(createAbortError(timeout.isTimedOut()))
                   return
                 }
 
@@ -338,26 +340,15 @@ export function createApiStore(config: ApiStoreConfig = {}) {
                   if (isStale()) return
 
                   if (opts.signal?.aborted) {
-                    const abortError: ApiError = new Error(
-                      timedOut ? 'Request timed out' : 'Aborted'
-                    )
-                    abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
-                    handleError(abortError)
+                    onError(createAbortError(timeout.isTimedOut()))
                     return
                   }
 
-                  const apiError: ApiError =
-                    error instanceof Error ? error : new Error('An unknown error occurred')
-                  if (error && typeof error === 'object' && 'status' in error) {
-                    apiError.status = error.status as number
-                  }
-                  if (error && typeof error === 'object' && 'code' in error) {
-                    apiError.code = error.code as string
-                  }
+                  const apiError = normalizeError(error)
 
                   // Check shouldRetry predicate
                   if (opts.shouldRetry && !opts.shouldRetry(apiError, attempt)) {
-                    handleError(apiError)
+                    onError(apiError)
                     return
                   }
 
@@ -367,12 +358,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
                     try {
                       await abortableSleep(backoffFn(attempt), opts.signal)
                     } catch {
-                      // Sleep was aborted — treat as abort/timeout error
-                      const abortError: ApiError = new Error(
-                        timedOut ? 'Request timed out' : 'Aborted'
-                      )
-                      abortError.code = timedOut ? 'TIMEOUT' : 'ABORT_ERR'
-                      handleError(abortError)
+                      onError(createAbortError(timeout.isTimedOut()))
                       return
                     }
                   }
@@ -380,7 +366,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
               }
 
               if (lastError) {
-                handleError(lastError)
+                onError(lastError)
               }
             }
 
@@ -393,9 +379,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             try {
               await composedHandler(key, apiCall, { ...effectiveOptions, retry })
             } finally {
-              // Clean up timeout timer
-              if (timeoutId) clearTimeout(timeoutId)
-              // Call onSettled regardless of outcome (but not for stale/dedup callers)
+              timeout.cleanup()
               options.onSettled?.()
             }
 
@@ -404,6 +388,9 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             const finalState = get().apiStates[key]
             if (finalState?.status === FetchStatus.SUCCESS) {
               return finalState.data as T
+            }
+            if (options.throwOnError && finalState?.error) {
+              throw finalState.error
             }
             return undefined
           })()
@@ -421,10 +408,25 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           key: string,
           apiCall: () => Promise<{ data: T }>,
           interval: number,
-          options?: ApiCallOptions<T>
+          options?: ApiCallOptions<T> & { immediate?: boolean }
         ) => {
-          const id = setInterval(() => get().handleApi(key, apiCall, options), interval)
-          return () => clearInterval(id)
+          const { immediate, ...apiOptions } = options ?? {}
+          let polling = true
+
+          const tick = () => {
+            if (!polling) return
+            // Skip if the previous request is still in-flight
+            const current = get().apiStates[key]
+            if (current?.status === FetchStatus.LOADING) return
+            get().handleApi(key, apiCall, apiOptions as ApiCallOptions<T>)
+          }
+
+          if (immediate) tick()
+          const id = setInterval(tick, interval)
+          return () => {
+            polling = false
+            clearInterval(id)
+          }
         },
 
         addMiddleware: middleware => {

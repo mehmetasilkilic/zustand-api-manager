@@ -143,6 +143,22 @@ export interface ApiCallOptions<T = unknown> {
    * network calls when multiple components request the same data simultaneously.
    */
   dedupe?: boolean
+  /**
+   * If `true`, the returned promise will reject with the `ApiError` instead of
+   * resolving to `undefined` on failure. This enables `try/catch` patterns where
+   * the caller can handle errors inline.
+   *
+   * @example
+   * ```ts
+   * try {
+   *   const data = await handleApi('users', fetchUsers, { throwOnError: true })
+   *   // data is guaranteed non-undefined here
+   * } catch (error) {
+   *   console.error('Request failed:', error)
+   * }
+   * ```
+   */
+  throwOnError?: boolean
 }
 
 /**
@@ -266,6 +282,30 @@ export interface ApiStore {
   resetApiStates: (keys: string[]) => void
 
   /**
+   * Reset all API states back to their initial state. Clears every tracked key,
+   * removes all persistence, and cleans up internal tracking maps.
+   * Useful for a full cleanup on logout or app reset.
+   *
+   * @example
+   * ```ts
+   * useApiStore.getState().resetAll()
+   * ```
+   */
+  resetAll: () => void
+
+  /**
+   * Invalidate all cached API keys in a single state update.
+   * Clears `fetchedAt` for every key while preserving existing data and status.
+   * The next `handleApi` call with `staleTime` will refetch.
+   *
+   * @example
+   * ```ts
+   * useApiStore.getState().invalidateAll()
+   * ```
+   */
+  invalidateAll: () => void
+
+  /**
    * Execute an API call with full lifecycle management: sets status to `LOADING`,
    * handles retries with exponential backoff, supports abort signals, runs through
    * the middleware chain, and updates the state to `SUCCESS` or `ERROR`.
@@ -287,13 +327,15 @@ export interface ApiStore {
 
   /**
    * Start polling an API endpoint at a regular interval using `setInterval`.
-   * Returns a function to stop polling.
+   * Returns a function to stop polling. If the previous poll is still in-flight
+   * when the next tick fires, the tick is skipped to prevent request stacking.
    *
    * @typeParam T - The expected response data type.
    * @param key - The unique identifier for the API endpoint.
    * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
    * @param interval - The polling interval in milliseconds.
    * @param options - Optional configuration passed to each `handleApi` call.
+   * @param options.immediate - If `true`, fires the first request immediately instead of waiting for the first interval.
    * @returns A function to stop polling.
    *
    * @example
@@ -301,7 +343,8 @@ export interface ApiStore {
    * const stop = useApiStore.getState().startPolling(
    *   'notifications',
    *   () => fetchNotifications(),
-   *   10_000
+   *   10_000,
+   *   { immediate: true }
    * )
    *
    * // Later, stop polling:
@@ -312,7 +355,7 @@ export interface ApiStore {
     key: string,
     apiCall: () => Promise<{ data: T }>,
     interval: number,
-    options?: ApiCallOptions<T>
+    options?: ApiCallOptions<T> & { immediate?: boolean }
   ) => () => void
 
   /**

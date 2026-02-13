@@ -24,6 +24,7 @@ A powerful and flexible API state management solution built on top of Zustand.
 - [Request Timeout](#request-timeout)
 - [Request Deduplication](#request-deduplication)
 - [Polling](#polling)
+- [Throw on Error](#throw-on-error)
 - [Multiple Store Instances](#multiple-store-instances)
 - [TypeScript Support](#typescript-support)
 - [Contributing](#contributing)
@@ -51,15 +52,16 @@ npm install zustand-api-manager zustand immer
 - Race condition protection (stale responses are automatically discarded)
 - Built-in caching via `staleTime` — skip refetches when data is fresh
 - Cache invalidation via `invalidateApi` / `invalidateApis` — mark data as stale without removing it
-- Batch operations via `invalidateApis` and `resetApiStates` — update multiple keys in a single state update
+- Batch operations via `invalidateApis`, `resetApiStates`, `resetAll`, and `invalidateAll`
 - Optimistic updates with automatic rollback on error
 - Request timeout with `TIMEOUT` error code
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
+- `throwOnError` option — reject the promise instead of resolving to `undefined` on failure
 - `onSettled` callback — runs after both success and error for cleanup
-- `startPolling` store method for interval-based refetching (no React import)
+- `startPolling` store method for interval-based refetching with `immediate` option and overlap guard
 - `fetchedAt` timestamp tracking for every endpoint
 - SSR-safe (no `localStorage` access on the server)
-- Factory function for multiple isolated store instances with pre-bound hooks
+- Factory function for multiple fully isolated store instances with pre-bound hooks
 - TypeScript support with strong typing (including typed `onSuccess` callbacks)
 
 ## Usage
@@ -206,7 +208,10 @@ The default singleton store for managing API states. Provides the following meth
 - `invalidateApi(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
 - `invalidateApis(keys)` — Batch-invalidate multiple keys in a single state update
 - `resetApiStates(keys)` — Batch-reset multiple keys in a single state update
+- `resetAll()` — Reset every API state and clear all persistence (useful for logout)
+- `invalidateAll()` — Mark every cached key as stale in a single state update
 - `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
+- `startPolling(key, apiCall, interval, options?)` — Poll an endpoint at a regular interval; returns a stop function
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
 
@@ -267,12 +272,20 @@ Also accepts an optional store instance as the second argument.
 
 A store method that polls an API endpoint at a regular interval using `setInterval`. Returns a stop function. No React import required.
 
+- `key` — The unique identifier for the API endpoint
+- `apiCall` — A function that returns a promise resolving to `{ data: T }`
+- `interval` — The polling interval in milliseconds
+- `options` — Optional `ApiCallOptions<T>` with an additional `immediate?: boolean` field
+
+If `immediate` is `true`, the first request fires immediately instead of waiting for the first interval tick. If the previous poll is still in-flight when the next tick fires, the tick is skipped to prevent request stacking.
+
 ```typescript
 // Start polling — returns a stop function
 const stop = useApiStore.getState().startPolling(
   "notifications",
   () => fetchNotifications(),
-  10_000 // every 10 seconds
+  10_000, // every 10 seconds
+  { immediate: true } // fire first request immediately
 );
 
 // Stop polling when done
@@ -286,7 +299,8 @@ useEffect(() => {
   const stop = useApiStore.getState().startPolling(
     "stats",
     () => fetchStats(),
-    30_000
+    30_000,
+    { immediate: true }
   );
   return stop; // cleanup on unmount
 }, []);
@@ -326,6 +340,7 @@ Options you can pass to `handleApi`. The type parameter `T` is inferred automati
 - `optimisticData?: T` — data to show immediately while the request is in-flight (rolled back on error)
 - `timeout?: number` — abort the request if it doesn't complete within this many milliseconds (error code: `'TIMEOUT'`)
 - `dedupe?: boolean` — if `true`, concurrent calls to the same key share the existing in-flight promise
+- `throwOnError?: boolean` — if `true`, the promise rejects with `ApiError` instead of resolving to `undefined` on failure
 
 ## Middleware and Error Handling
 
@@ -494,7 +509,19 @@ store.invalidateApis(["getUser", "getUserPosts", "getUserSettings"]);
 store.resetApiStates(["getUser", "getUserPosts", "getUserSettings"]);
 ```
 
-Both methods are also available on custom store instances created with `createApiStore`.
+For a full wipe, use `resetAll` or `invalidateAll`:
+
+```typescript
+const store = useApiStore.getState();
+
+// Invalidate every cached key — existing data remains visible, but staleTime will refetch
+store.invalidateAll();
+
+// Reset everything — clears all data, errors, and persistence
+store.resetAll();
+```
+
+All batch methods are also available on custom store instances created with `createApiStore`.
 
 ## Optimistic Updates
 
@@ -556,18 +583,21 @@ Once the shared request completes, subsequent calls start a fresh request. Dedup
 
 ## Polling
 
-Use `startPolling` on the store to poll an endpoint at a regular interval. It returns a stop function:
+Use `startPolling` on the store to poll an endpoint at a regular interval. It returns a stop function. Use `{ immediate: true }` to fire the first request immediately instead of waiting for the first interval tick:
 
 ```typescript
 const stop = useApiStore.getState().startPolling(
   "notifications",
   () => fetchNotifications(),
-  10_000 // every 10 seconds
+  10_000, // every 10 seconds
+  { immediate: true }
 );
 
 // Stop when done
 stop();
 ```
+
+If the previous poll is still in-flight when the next tick fires, the tick is skipped automatically to prevent request stacking.
 
 In a React component, use it inside `useEffect` for automatic cleanup:
 
@@ -579,7 +609,8 @@ function NotificationBell() {
     return useApiStore.getState().startPolling(
       "notifications",
       () => fetchNotifications(),
-      10_000
+      10_000,
+      { immediate: true }
     );
   }, []);
 
@@ -603,9 +634,26 @@ handleApi(() => submitForm(data), {
 
 `onSettled` is called after `onSuccess` or `onError`.
 
+## Throw on Error
+
+By default, `handleApi` resolves to `undefined` when a request fails. Use `throwOnError` to reject the promise with the `ApiError` instead, enabling `try/catch` patterns:
+
+```typescript
+try {
+  const data = await handleApi(() => fetchUser(1), { throwOnError: true });
+  // data is guaranteed non-undefined here
+  console.log("User:", data.username);
+} catch (error) {
+  // error is the ApiError with optional status/code fields
+  console.error("Request failed:", error.message);
+}
+```
+
+The store state is still updated normally (status set to `ERROR`, error handlers called) — the only difference is the promise rejection behavior.
+
 ## Multiple Store Instances
 
-By default, all hooks use a shared singleton store. For SSR, testing, or isolated modules, create separate instances with `createApiStore`:
+By default, all hooks use a shared singleton store. For SSR, testing, or isolated modules, create separate instances with `createApiStore`. Each store is **fully isolated** — race-condition tracking, request deduplication, and all state are scoped to the store instance, so you can safely reuse the same key names across different stores:
 
 ```typescript
 import {
@@ -640,8 +688,6 @@ function MyComponent() {
 // Works with the composer too
 const useApi = createApiComposer<MyApiStructure>(useStore);
 ```
-
-> **Key collision warning:** In development, if the same API key (e.g. `"getUser"`) is used across different store instances, a console warning is emitted. This is because race-condition tracking and request deduplication are shared globally. Use unique key names per store, or use the singleton store for shared keys.
 
 ## TypeScript Support
 

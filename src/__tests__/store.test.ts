@@ -994,7 +994,7 @@ describe('resetApiStates', () => {
 // ── startPolling ─────────────────────────────────────────────
 
 describe('startPolling', () => {
-  it('calls handleApi at the specified interval', () => {
+  it('calls handleApi at the specified interval', async () => {
     vi.useFakeTimers()
     const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
 
@@ -1002,30 +1002,30 @@ describe('startPolling', () => {
 
     expect(apiCall).not.toHaveBeenCalled()
 
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(apiCall).toHaveBeenCalledTimes(1)
 
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(apiCall).toHaveBeenCalledTimes(2)
 
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(apiCall).toHaveBeenCalledTimes(3)
 
     vi.useRealTimers()
   })
 
-  it('returns a stop function that clears the interval', () => {
+  it('returns a stop function that clears the interval', async () => {
     vi.useFakeTimers()
     const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
 
     const stop = getState().startPolling('users', apiCall, 1000)
 
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(apiCall).toHaveBeenCalledTimes(1)
 
     stop()
 
-    vi.advanceTimersByTime(3000)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(apiCall).toHaveBeenCalledTimes(1)
 
     vi.useRealTimers()
@@ -1045,78 +1045,280 @@ describe('startPolling', () => {
     stop()
     vi.useRealTimers()
   })
+
+  it('fires immediately when immediate option is set', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const stop = getState().startPolling('users', apiCall, 1000, { immediate: true })
+
+    // Should fire immediately without waiting for interval
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    stop()
+    vi.useRealTimers()
+  })
+
+  it('does not fire immediately when immediate is not set', () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+
+    const stop = getState().startPolling('users', apiCall, 1000)
+
+    expect(apiCall).not.toHaveBeenCalled()
+
+    stop()
+    vi.useRealTimers()
+  })
+
+  it('skips tick when previous request is still loading', async () => {
+    vi.useFakeTimers()
+    let resolveCall: (value: { data: string }) => void
+    const apiCall = vi.fn(
+      () =>
+        new Promise<{ data: string }>(resolve => {
+          resolveCall = resolve
+        })
+    )
+
+    getState().startPolling('users', apiCall, 1000)
+
+    // First tick — starts a request that stays pending
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Second tick — should skip because status is LOADING
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Resolve the first call
+    resolveCall!({ data: 'ok' })
+    await vi.advanceTimersByTimeAsync(0) // flush microtasks
+
+    // Third tick — should fire because request completed
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
 })
 
-// ── key ownership warning ────────────────────────────────────
+// ── store isolation ───────────────────────────────────────────
 
-describe('key ownership warning', () => {
-  it('warns when the same key is used across different store instances', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
+describe('store isolation', () => {
+  it('different stores using the same key do not interfere', async () => {
     const storeA = createApiStore({ storageKey: 'store-a' })
     const storeB = createApiStore({ storageKey: 'store-b' })
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
-
-    // First store claims the key — no warning
-    await storeA.useStore.getState().handleApi('shared-key', apiCall)
-    expect(warnSpy).not.toHaveBeenCalled()
-
-    // Second store uses the same key — should warn
-    await storeB.useStore.getState().handleApi('shared-key', apiCall)
-    expect(warnSpy).toHaveBeenCalledOnce()
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Key "shared-key" is already used by another store instance')
+    await storeA.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'from-a' })
+    )
+    await storeB.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'from-b' })
     )
 
-    warnSpy.mockRestore()
+    expect(storeA.useStore.getState().apiStates['users'].data).toBe('from-a')
+    expect(storeB.useStore.getState().apiStates['users'].data).toBe('from-b')
   })
 
-  it('does not warn when different stores use different keys', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
+  it('race condition tracking is isolated per store', async () => {
     const storeA = createApiStore({ storageKey: 'store-a2' })
     const storeB = createApiStore({ storageKey: 'store-b2' })
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    let resolveA: (value: { data: string }) => void
+    const slowCallA = () =>
+      new Promise<{ data: string }>(resolve => {
+        resolveA = resolve
+      })
 
-    await storeA.useStore.getState().handleApi('key-a', apiCall)
-    await storeB.useStore.getState().handleApi('key-b', apiCall)
+    // Start a slow request on storeA
+    const promiseA = storeA.useStore.getState().handleApi('users', slowCallA)
 
-    expect(warnSpy).not.toHaveBeenCalled()
+    // storeB makes a quick request with the same key — should not affect storeA
+    await storeB.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'fast-b' })
+    )
 
-    warnSpy.mockRestore()
+    // Resolve storeA's request — should NOT be treated as stale
+    resolveA!({ data: 'slow-a' })
+    await promiseA
+
+    expect(storeA.useStore.getState().apiStates['users'].data).toBe('slow-a')
+    expect(storeB.useStore.getState().apiStates['users'].data).toBe('fast-b')
   })
 
-  it('does not warn when the same store reuses a key', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
+  it('deduplication is isolated per store', async () => {
     const storeA = createApiStore({ storageKey: 'store-a3' })
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const storeB = createApiStore({ storageKey: 'store-b3' })
 
-    await storeA.useStore.getState().handleApi('my-key', apiCall)
-    await storeA.useStore.getState().handleApi('my-key', apiCall)
+    let resolveA: (value: { data: string }) => void
+    const callA = vi.fn(
+      () => new Promise<{ data: string }>(resolve => { resolveA = resolve })
+    )
+    const callB = vi.fn(() => Promise.resolve({ data: 'b' }))
 
-    expect(warnSpy).not.toHaveBeenCalled()
+    // Start a deduped request on storeA
+    const promiseA = storeA.useStore.getState().handleApi('users', callA, { dedupe: true })
 
-    warnSpy.mockRestore()
+    // storeB deduped request with same key — should NOT share storeA's promise
+    await storeB.useStore.getState().handleApi('users', callB, { dedupe: true })
+
+    expect(callA).toHaveBeenCalledTimes(1)
+    expect(callB).toHaveBeenCalledTimes(1)
+
+    resolveA!({ data: 'a' })
+    await promiseA
   })
 
-  it('allows reuse of a key after resetApiState releases ownership', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
+  it('resetApiState on one store does not affect another', async () => {
     const storeA = createApiStore({ storageKey: 'store-a4' })
     const storeB = createApiStore({ storageKey: 'store-b4' })
 
     const apiCall = () => Promise.resolve({ data: 'ok' })
 
-    await storeA.useStore.getState().handleApi('released-key', apiCall)
-    storeA.useStore.getState().resetApiState('released-key')
+    await storeA.useStore.getState().handleApi('users', apiCall)
+    await storeB.useStore.getState().handleApi('users', apiCall)
 
-    // After reset, storeB should be able to claim the key without warning
-    await storeB.useStore.getState().handleApi('released-key', apiCall)
-    expect(warnSpy).not.toHaveBeenCalled()
+    storeA.useStore.getState().resetApiState('users')
 
-    warnSpy.mockRestore()
+    expect(storeA.useStore.getState().apiStates['users']).toBeUndefined()
+    expect(storeB.useStore.getState().apiStates['users'].data).toBe('ok')
+  })
+})
+
+// ── handleApi — throwOnError ──────────────────────────────────
+
+describe('handleApi — throwOnError', () => {
+  it('rejects with ApiError when throwOnError is true and request fails', async () => {
+    const apiCall = () => Promise.reject(new Error('fail'))
+    await expect(
+      getState().handleApi('users', apiCall, { throwOnError: true })
+    ).rejects.toThrow('fail')
+  })
+
+  it('resolves with data when throwOnError is true and request succeeds', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const result = await getState().handleApi('users', apiCall, { throwOnError: true })
+    expect(result).toBe('ok')
+  })
+
+  it('still updates store state to ERROR before rejecting', async () => {
+    const apiCall = () => Promise.reject(new Error('fail'))
+    try {
+      await getState().handleApi('users', apiCall, { throwOnError: true })
+    } catch {
+      // expected
+    }
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['users'].error!.message).toBe('fail')
+  })
+
+  it('resolves to undefined without throwing when throwOnError is not set', async () => {
+    const apiCall = () => Promise.reject(new Error('fail'))
+    const result = await getState().handleApi('users', apiCall)
+    expect(result).toBeUndefined()
+  })
+
+  it('includes status and code on thrown error', async () => {
+    const err = Object.assign(new Error('not found'), { status: 404, code: 'NOT_FOUND' })
+    const apiCall = () => Promise.reject(err)
+    try {
+      await getState().handleApi('users', apiCall, { throwOnError: true })
+      expect.unreachable('should have thrown')
+    } catch (e) {
+      const error = e as { status?: number; code?: string; message: string }
+      expect(error.message).toBe('not found')
+      expect(error.status).toBe(404)
+      expect(error.code).toBe('NOT_FOUND')
+    }
+  })
+})
+
+// ── resetAll ──────────────────────────────────────────────────
+
+describe('resetAll', () => {
+  it('clears all API states', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+    await getState().handleApi('comments', apiCall)
+
+    getState().resetAll()
+
+    expect(Object.keys(getState().apiStates)).toHaveLength(0)
+  })
+
+  it('clears all persistentKeys', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall, { persist: true })
+    await getState().handleApi('posts', apiCall, { persist: true })
+
+    getState().resetAll()
+
+    expect(Object.keys(getState().persistentKeys)).toHaveLength(0)
+  })
+
+  it('is a no-op when store is already empty', () => {
+    getState().resetAll()
+    expect(Object.keys(getState().apiStates)).toHaveLength(0)
+  })
+})
+
+// ── invalidateAll ─────────────────────────────────────────────
+
+describe('invalidateAll', () => {
+  it('clears fetchedAt for all keys', async () => {
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+
+    expect(getState().apiStates['users'].fetchedAt).not.toBeNull()
+    expect(getState().apiStates['posts'].fetchedAt).not.toBeNull()
+
+    getState().invalidateAll()
+
+    expect(getState().apiStates['users'].fetchedAt).toBeNull()
+    expect(getState().apiStates['posts'].fetchedAt).toBeNull()
+  })
+
+  it('preserves data and status for all keys', async () => {
+    const apiCall = () => Promise.resolve({ data: 'mydata' })
+    await getState().handleApi('users', apiCall)
+    await getState().handleApi('posts', apiCall)
+
+    getState().invalidateAll()
+
+    expect(getState().apiStates['users'].data).toBe('mydata')
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['posts'].data).toBe('mydata')
+    expect(getState().apiStates['posts'].status).toBe(FetchStatus.SUCCESS)
+  })
+
+  it('causes staleTime to refetch all keys after invalidation', async () => {
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    // Both served from cache
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    getState().invalidateAll()
+
+    // Both refetch
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
+    expect(apiCall).toHaveBeenCalledTimes(4)
+  })
+
+  it('is a no-op when store is empty', () => {
+    getState().invalidateAll()
+    expect(Object.keys(getState().apiStates)).toHaveLength(0)
   })
 })

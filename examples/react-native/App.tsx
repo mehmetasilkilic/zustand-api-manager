@@ -12,8 +12,10 @@ import {
 import {
   ApiEndpoint,
   createApiComposer,
+  createApiStore,
   FetchStatus,
   useApiHandler,
+  useApiStore,
   useLoadingStates
 } from 'zustand-api-manager'
 
@@ -25,6 +27,11 @@ interface User {
 interface Post {
   id: number
   title: string
+}
+
+interface Comment {
+  id: number
+  body: string
 }
 
 // Simulated APIs --------------------------------------------------------------
@@ -48,41 +55,102 @@ const fetchPosts = () =>
     )
   })
 
+const fetchComments = () =>
+  new Promise<{ data: Comment[] }>(resolve => {
+    setTimeout(
+      () =>
+        resolve({
+          data: [
+            { id: 1, body: 'Great post!' },
+            { id: 2, body: 'Very useful, thanks.' }
+          ]
+        }),
+      1000
+    )
+  })
+
 const updateUser = (user: User) =>
   new Promise<{ data: User }>(resolve => {
     setTimeout(() => resolve({ data: { ...user, username: user.username + ' (saved)' } }), 1500)
   })
 
-// Typed API structure for composer -------------------------------------------
+// Second store ----------------------------------------------------------------
 
-interface MyApiStructure {
+interface SecondApiStructure {
+  getComments: ApiEndpoint<void, Comment[]>
+}
+
+const secondStore = createApiStore({ storageKey: 'second-store' })
+const useSecondApi = secondStore.createApiComposer<SecondApiStructure>()
+
+// Default store composer ------------------------------------------------------
+
+interface DefaultApiStructure {
   getUser: ApiEndpoint<{ id: number }, User>
   getPosts: ApiEndpoint<void, Post[]>
 }
 
-const useApi = createApiComposer<MyApiStructure>()
+const useApi = createApiComposer<DefaultApiStructure>()
 
 // Components ------------------------------------------------------------------
 
+const GlobalLoadingIndicator: React.FC = () => {
+  const defaultLoading = useLoadingStates()
+  const secondLoading = secondStore.useLoadingStates()
+
+  if (!defaultLoading && !secondLoading) return null
+
+  return (
+    <View style={styles.banner}>
+      <ActivityIndicator size="small" color="#faad14" style={{ marginRight: 8 }} />
+      <Text style={styles.bannerTextGlobal}>At least one store is loading…</Text>
+    </View>
+  )
+}
+
+const DefaultStoreLoading: React.FC = () => {
+  const anyLoading = useLoadingStates()
+
+  if (!anyLoading) return null
+
+  return (
+    <View style={[styles.banner, { backgroundColor: '#e6f4ff', borderColor: '#91caff' }]}>
+      <ActivityIndicator size="small" color="#1677ff" style={{ marginRight: 8 }} />
+      <Text style={[styles.bannerTextGlobal, { color: '#0958d9' }]}>Default store loading…</Text>
+    </View>
+  )
+}
+
+const SecondStoreLoading: React.FC = () => {
+  const anyLoading = secondStore.useLoadingStates()
+
+  if (!anyLoading) return null
+
+  return (
+    <View style={[styles.banner, { backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }]}>
+      <ActivityIndicator size="small" color="#52c41a" style={{ marginRight: 8 }} />
+      <Text style={[styles.bannerTextGlobal, { color: '#389e0d' }]}>Second store loading…</Text>
+    </View>
+  )
+}
+
 const BasicHandlerExample: React.FC = () => {
-  const { data, status, isIdle, isLoading, isError, fetchedAt, handleApi, resetApi } =
+  const { data, status, isIdle, isLoading, fetchedAt, handleApi, resetApi } =
     useApiHandler<User>('user')
 
   const loadUser = async () => {
     const user = await handleApi(() => fetchUser(7), {
       persist: true,
       staleTime: 5000,
-      onSuccess: data => console.log('User loaded:', data.username)
+      onSuccess: d => console.log('User loaded:', d.username)
     })
     if (user) console.log('Returned user:', user.username)
   }
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>useApiHandler (user)</Text>
-      <Text style={styles.featureHint}>
-        staleTime · status · fetchedAt · resetApi · typed onSuccess
-      </Text>
+      <Text style={styles.cardTitle}>useApiHandler — default store</Text>
+      <Text style={styles.featureHint}>staleTime · persist · fetchedAt · resetApi</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -99,7 +167,6 @@ const BasicHandlerExample: React.FC = () => {
         Status: {status}
         {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
       </Text>
-      {isError && <Text style={styles.errorText}>Error loading user</Text>}
       <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
     </View>
   )
@@ -112,16 +179,14 @@ const OptimisticUpdateExample: React.FC = () => {
     const optimistic: User = { id: 42, username: 'optimistic-jane' }
     void handleApi(() => updateUser(optimistic), {
       optimisticData: optimistic,
-      onSuccess: data => console.log('Saved user:', data.username)
+      onSuccess: d => console.log('Saved user:', d.username)
     })
   }
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>Optimistic update</Text>
-      <Text style={styles.featureHint}>
-        Data appears instantly via optimisticData, then gets replaced by server response.
-      </Text>
+      <Text style={styles.cardTitle}>Optimistic update — default store</Text>
+      <Text style={styles.featureHint}>optimisticData · onSuccess</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -150,15 +215,13 @@ const ComposerExample: React.FC = () => {
     useApi('getPosts')
 
   const loadPosts = () => {
-    void handleApi(() => fetchPosts(), {
-      staleTime: 10000
-    })
+    void handleApi(() => fetchPosts(), { staleTime: 10000 })
   }
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>createApiComposer (getPosts)</Text>
-      <Text style={styles.featureHint}>staleTime · resetApi · fetchedAt</Text>
+      <Text style={styles.cardTitle}>createApiComposer — default store</Text>
+      <Text style={styles.featureHint}>staleTime · typed composer · resetApi</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -190,18 +253,123 @@ const ComposerExample: React.FC = () => {
   )
 }
 
-const GlobalLoadingIndicator: React.FC = () => {
-  const anyLoading = useLoadingStates()
-  const userOrPostsLoading = useLoadingStates(['user', 'getPosts'])
+const SecondStoreExample: React.FC = () => {
+  const { data: comments, isLoading, status, fetchedAt, handleApi, resetApi, invalidateApi } =
+    useSecondApi('getComments')
 
-  if (!anyLoading) return null
+  const loadComments = () => {
+    void handleApi(() => fetchComments(), { staleTime: 8000 })
+  }
 
   return (
-    <View style={styles.banner}>
-      <ActivityIndicator size="small" color="#1677ff" style={{ marginRight: 8 }} />
-      <Text style={styles.bannerText}>
-        {userOrPostsLoading ? 'User or posts are loading…' : 'Some API is loading…'}
+    <View style={[styles.card, { borderColor: '#b7eb8f', borderWidth: 1 }]}>
+      <Text style={styles.cardTitle}>createApiComposer — second store</Text>
+      <Text style={styles.featureHint}>isolated store · staleTime · invalidateApi</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Loading…' : 'Load comments'}
+            onPress={loadComments}
+            disabled={isLoading}
+            color="#52c41a"
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Invalidate"
+            onPress={() => invalidateApi()}
+            disabled={status === FetchStatus.IDLE}
+            color="#52c41a"
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Reset"
+            onPress={resetApi}
+            disabled={status === FetchStatus.IDLE}
+            color="#999"
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
       </Text>
+      {comments?.map(c => (
+        <Text key={c.id} style={styles.listItem}>
+          • {c.body}
+        </Text>
+      )) ?? <Text style={styles.listItem}>No comments loaded</Text>}
+    </View>
+  )
+}
+
+const SecondStoreHandlerExample: React.FC = () => {
+  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
+    secondStore.useApiHandler<User>('user')
+
+  const loadUser = async () => {
+    const user = await handleApi(() => fetchUser(99), { staleTime: 5000 })
+    if (user) console.log('[Second store] user:', user.username)
+  }
+
+  return (
+    <View style={[styles.card, { borderColor: '#b7eb8f', borderWidth: 1 }]}>
+      <Text style={styles.cardTitle}>useApiHandler — second store (same 'user' key)</Text>
+      <Text style={styles.featureHint}>same key name as default store — proves isolation</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Loading…' : 'Load user (id=99)'}
+            onPress={loadUser}
+            disabled={isLoading}
+            color="#52c41a"
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Reset"
+            onPress={resetApi}
+            disabled={status === FetchStatus.IDLE}
+            color="#999"
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
+      </Text>
+      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
+    </View>
+  )
+}
+
+const ResetAllExample: React.FC = () => {
+  const resetDefault = () => useApiStore.getState().resetAll()
+  const resetSecond = () => secondStore.useStore.getState().resetAll()
+  const invalidateDefault = () => useApiStore.getState().invalidateAll()
+  const invalidateSecond = () => secondStore.useStore.getState().invalidateAll()
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Bulk operations</Text>
+      <Text style={styles.featureHint}>resetAll · invalidateAll — across both stores</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button title="Reset default" onPress={resetDefault} />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="Invalidate default" onPress={invalidateDefault} />
+        </View>
+      </View>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button title="Reset second" onPress={resetSecond} color="#52c41a" />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="Invalidate second" onPress={invalidateSecond} color="#52c41a" />
+        </View>
+      </View>
     </View>
   )
 }
@@ -211,17 +379,26 @@ const App: React.FC = () => {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Zustand API Manager – React Native Example</Text>
+        <Text style={styles.title}>Zustand API Manager — Multi-Store</Text>
         <Text style={styles.subtitle}>
-          Demo of <Text style={styles.code}>useApiHandler</Text>,{' '}
-          <Text style={styles.code}>useLoadingStates</Text>,{' '}
-          <Text style={styles.code}>createApiComposer</Text>, and new features.
+          Two isolated stores with the same "user" key proving store isolation.
         </Text>
 
         <GlobalLoadingIndicator />
+        <DefaultStoreLoading />
+        <SecondStoreLoading />
+
+        <Text style={styles.sectionTitle}>Default store</Text>
         <BasicHandlerExample />
         <OptimisticUpdateExample />
         <ComposerExample />
+
+        <Text style={[styles.sectionTitle, { color: '#52c41a' }]}>Second store</Text>
+        <SecondStoreExample />
+        <SecondStoreHandlerExample />
+
+        <Text style={styles.sectionTitle}>Bulk operations</Text>
+        <ResetAllExample />
       </ScrollView>
     </SafeAreaView>
   )
@@ -250,24 +427,25 @@ const styles = StyleSheet.create({
     color: '#555',
     marginBottom: 16
   },
-  code: {
-    fontFamily: 'Courier',
-    backgroundColor: '#e6f4ff',
-    paddingHorizontal: 4,
-    borderRadius: 4
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1677ff',
+    marginTop: 16,
+    marginBottom: 8
   },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 8,
     borderRadius: 8,
-    backgroundColor: '#e6f4ff',
-    borderColor: '#91caff',
+    backgroundColor: '#fffae6',
+    borderColor: '#ffe58f',
     borderWidth: 1,
-    marginBottom: 16
+    marginBottom: 8
   },
-  bannerText: {
-    color: '#0958d9',
+  bannerTextGlobal: {
+    color: '#d48806',
     fontSize: 14
   },
   card: {
