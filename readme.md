@@ -26,6 +26,8 @@ A powerful and flexible API state management solution built on top of Zustand.
 - [Polling](#polling)
 - [Throw on Error](#throw-on-error)
 - [Multiple Store Instances](#multiple-store-instances)
+- [Persistence in React Native](#persistence-in-react-native)
+- [Performance](#performance)
 - [TypeScript Support](#typescript-support)
 - [Contributing](#contributing)
 - [License](#license)
@@ -44,7 +46,9 @@ npm install zustand-api-manager zustand immer
 - Built on top of Zustand for efficient state updates
 - Support for idle, loading, success, and error states
 - `handleApi` returns the response data directly on success
-- Persistent state options
+- **Stable function references** — `handleApi`, `resetApi`, and `invalidateApi` are wrapped in `useCallback` and safe to use in `useEffect` dependency arrays
+- **Optimized subscriptions** — hooks subscribe only to the data slice that changes; store methods are read without creating extra subscriptions
+- Persistent state options with custom storage support (sync and async)
 - Middleware support for customizing API call behavior
 - Global error handling with unsubscribe support
 - Request cancellation via `AbortSignal` (including mid-retry abort)
@@ -102,7 +106,7 @@ function MyComponent() {
         persist: true,
       }
     );
-  }, []);
+  }, [handleApi]); // handleApi is stable — safe to include in deps
 
   if (isIdle) return <div>Ready to fetch</div>;
   if (isLoading) return <div>Loading...</div>;
@@ -111,6 +115,8 @@ function MyComponent() {
   return <div>{data?.username}</div>;
 }
 ```
+
+> **Note:** `handleApi`, `resetApi`, and `invalidateApi` are referentially stable (wrapped in `useCallback`), so they won't cause infinite loops when listed in `useEffect` dependency arrays.
 
 `handleApi` returns a `Promise<T | undefined>`, so you can also use its return value directly:
 
@@ -175,7 +181,7 @@ function PostDetail({ postId }: { postId: number }) {
   useEffect(() => {
     // Params are passed through to the apiCall function
     handleApi({ id: postId }, (params) => fetchPost(params));
-  }, [postId]);
+  }, [postId, handleApi]); // handleApi is stable — won't cause extra fetches
 
   if (isLoading) return <Spinner />;
   return <div>{data?.title}</div>;
@@ -190,7 +196,7 @@ function UserList() {
 
   useEffect(() => {
     handleApi(() => fetchUsers());
-  }, []);
+  }, [handleApi]); // stable reference — safe in deps
 
   if (isLoading) return <Spinner />;
   return <ul>{data?.map((u) => <li key={u.id}>{u.name}</li>)}</ul>;
@@ -247,9 +253,11 @@ A hook for managing individual API calls. Returns an `ApiHandlerResult<T>` with:
 - `data` — The data returned from the API call
 - `error` — The error object if the call failed (`ApiError`)
 - `fetchedAt` — Timestamp (ms since epoch) of the last successful fetch, or `null`
-- `handleApi(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`
-- `resetApi()` — Reset the API state
-- `invalidateApi()` — Mark this endpoint's cache as stale
+- `handleApi(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`. **Stable reference** — safe to include in `useEffect` deps
+- `resetApi()` — Reset the API state. **Stable reference**
+- `invalidateApi()` — Mark this endpoint's cache as stale. **Stable reference**
+
+The hook only subscribes to the state slice for the given key, so changes to other keys won't trigger re-renders. The function references (`handleApi`, `resetApi`, `invalidateApi`) are memoized with `useCallback` and only change when the `key` or `store` argument changes.
 
 Accepts an optional second argument to use a custom store instance:
 
@@ -308,7 +316,7 @@ useEffect(() => {
 
 ### `createApiComposer`
 
-Creates a strongly-typed API composer. Returns a hook with all the same fields as `useApiHandler`, including `resetApi`, `invalidateApi`, `status`, and `fetchedAt`. Accepts an optional store instance:
+Creates a strongly-typed API composer. Returns a hook with all the same fields as `useApiHandler`, including `resetApi`, `invalidateApi`, `status`, and `fetchedAt`. All function references (`handleApi`, `resetApi`, `invalidateApi`) are stable across re-renders. Accepts an optional store instance:
 
 ```typescript
 const useApi = createApiComposer<MyApiStructure>(); // uses default store
@@ -460,7 +468,7 @@ function UserProfile({ userId }: { userId: number }) {
   useEffect(() => {
     // Won't refetch if the last successful fetch was less than 30 seconds ago
     handleApi(() => fetchUser(userId), { staleTime: 30_000 });
-  }, [userId]);
+  }, [userId, handleApi]); // handleApi is stable — won't trigger extra fetches
 
   return <div>{data?.name}</div>;
 }
@@ -688,6 +696,80 @@ function MyComponent() {
 // Works with the composer too
 const useApi = createApiComposer<MyApiStructure>(useStore);
 ```
+
+## Persistence in React Native
+
+The default store uses `localStorage` for persistence, which isn't available in React Native. Use the `storage` option in `createApiStore` to plug in any async-compatible storage backend such as `@react-native-async-storage/async-storage`:
+
+```bash
+npm install @react-native-async-storage/async-storage
+```
+
+```typescript
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createApiStore } from "zustand-api-manager";
+
+const {
+  useStore,
+  useApiHandler,
+  useLoadingStates,
+  createApiComposer,
+} = createApiStore({
+  storageKey: "my-app-api",
+  storage: {
+    getItem: (name) => AsyncStorage.getItem(name),
+    setItem: (name, value) => AsyncStorage.setItem(name, value),
+    removeItem: (name) => AsyncStorage.removeItem(name),
+  },
+});
+```
+
+Then use the returned hooks exactly like you would with the default store:
+
+```typescript
+import React, { useEffect } from "react";
+import { View, Text, ActivityIndicator } from "react-native";
+
+function UserProfile() {
+  const { data, isLoading, handleApi } = useApiHandler<User>("getUser");
+
+  useEffect(() => {
+    handleApi(() => fetchUser(1), { persist: true });
+  }, [handleApi]);
+
+  if (isLoading) return <ActivityIndicator />;
+  return (
+    <View>
+      <Text>{data?.name}</Text>
+    </View>
+  );
+}
+```
+
+Because the storage interface accepts **async** `getItem` / `setItem` / `removeItem`, any key-value store that returns promises works — MMKV, Expo SecureStore, etc.:
+
+```typescript
+import * as SecureStore from "expo-secure-store";
+
+const { useStore } = createApiStore({
+  storageKey: "secure-api",
+  storage: {
+    getItem: (name) => SecureStore.getItemAsync(name),
+    setItem: (name, value) => SecureStore.setItemAsync(name, value),
+    removeItem: (name) => SecureStore.deleteItemAsync(name),
+  },
+});
+```
+
+> **Tip:** Mark only the keys you actually need offline with `persist: true` in the call options — this keeps the stored payload small and rehydration fast.
+
+## Performance
+
+The hooks are designed for minimal re-renders:
+
+- **Single subscription per hook** — `useApiHandler` and `createApiComposer` subscribe only to the state slice for the given key. Changes to unrelated keys don't trigger re-renders.
+- **Stable function references** — `handleApi`, `resetApi`, and `invalidateApi` are wrapped in `useCallback` and only change when the `key` or `store` argument changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
+- **No extra subscriptions for store methods** — Store actions like `handleApi`, `resetApiState`, and `invalidateApi` are read via `getState()` inside callbacks rather than creating reactive subscriptions, reducing overhead.
 
 ## TypeScript Support
 

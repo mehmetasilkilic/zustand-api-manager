@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Button,
@@ -167,6 +167,47 @@ const BasicHandlerExample: React.FC = () => {
         Status: {status}
         {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
       </Text>
+      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
+    </View>
+  )
+}
+
+const UseEffectExample: React.FC = () => {
+  const [userId, setUserId] = useState(1)
+  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
+    useApiHandler<User>('effect-user')
+
+  // handleApi is a stable reference — safe to include in useEffect deps.
+  // This effect only re-runs when userId changes, not on every render.
+  useEffect(() => {
+    handleApi(() => fetchUser(userId), { staleTime: 5000 })
+  }, [userId, handleApi])
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>useEffect with handleApi — stable refs</Text>
+      <Text style={styles.featureHint}>handleApi in useEffect deps · staleTime · no infinite loops</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={`Next user (current: ${userId})`}
+            onPress={() => setUserId(id => id + 1)}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Reset"
+            onPress={resetApi}
+            disabled={status === FetchStatus.IDLE}
+            color="#999"
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
+      </Text>
+      {isLoading && <ActivityIndicator size="small" style={{ marginVertical: 4 }} />}
       <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
     </View>
   )
@@ -381,7 +422,8 @@ const App: React.FC = () => {
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Zustand API Manager — Multi-Store</Text>
         <Text style={styles.subtitle}>
-          Two isolated stores with the same "user" key proving store isolation.
+          Two isolated stores, stable handleApi refs in useEffect, and the same "user" key proving
+          store isolation.
         </Text>
 
         <GlobalLoadingIndicator />
@@ -390,6 +432,7 @@ const App: React.FC = () => {
 
         <Text style={styles.sectionTitle}>Default store</Text>
         <BasicHandlerExample />
+        <UseEffectExample />
         <OptimisticUpdateExample />
         <ComposerExample />
 

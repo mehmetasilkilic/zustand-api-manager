@@ -139,3 +139,33 @@ describe('createApiComposer — invalidateApi', () => {
     expect(result.current.isSuccess).toBe(true)
   })
 })
+
+describe('createApiComposer — stable references', () => {
+  it('handleApi, resetApi, and invalidateApi are stable across re-renders', async () => {
+    const { result, rerender } = renderHook(() => useApi('getUsers'))
+
+    const firstHandleApi = result.current.handleApi
+    const firstResetApi = result.current.resetApi
+    const firstInvalidateApi = result.current.invalidateApi
+
+    // Trigger a state change
+    act(() => {
+      useApiStore
+        .getState()
+        .setApiState('getUsers', { status: FetchStatus.LOADING })
+    })
+
+    expect(result.current.isLoading).toBe(true)
+
+    // Function references should be the same
+    expect(result.current.handleApi).toBe(firstHandleApi)
+    expect(result.current.resetApi).toBe(firstResetApi)
+    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+
+    // Also stable after a plain rerender
+    rerender()
+    expect(result.current.handleApi).toBe(firstHandleApi)
+    expect(result.current.resetApi).toBe(firstResetApi)
+    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+  })
+})

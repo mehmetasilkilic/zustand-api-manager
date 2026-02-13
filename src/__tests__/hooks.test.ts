@@ -195,5 +195,45 @@ describe('useApiHandler', () => {
     expect(result.current.data).toBe('hello')
     expect(result.current.isSuccess).toBe(true)
   })
+
+  it('handleApi reference is stable across re-renders', async () => {
+    const { result, rerender } = renderHook(() => useApiHandler<string>('users'))
+
+    const firstHandleApi = result.current.handleApi
+    const firstResetApi = result.current.resetApi
+    const firstInvalidateApi = result.current.invalidateApi
+
+    // Trigger a re-render by changing unrelated state
+    act(() => {
+      useApiStore.getState().setApiState('users', { status: FetchStatus.LOADING })
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(true))
+
+    // Function references should be the same
+    expect(result.current.handleApi).toBe(firstHandleApi)
+    expect(result.current.resetApi).toBe(firstResetApi)
+    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+
+    // Also stable after a plain rerender
+    rerender()
+    expect(result.current.handleApi).toBe(firstHandleApi)
+    expect(result.current.resetApi).toBe(firstResetApi)
+    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+  })
+
+  it('handleApi reference updates when key changes', () => {
+    const { result, rerender } = renderHook(
+      ({ key }: { key: string }) => useApiHandler<string>(key),
+      { initialProps: { key: 'users' } }
+    )
+
+    const firstHandleApi = result.current.handleApi
+
+    rerender({ key: 'posts' })
+
+    // Function references should change because key changed
+    expect(result.current.handleApi).not.toBe(firstHandleApi)
+  })
 })
 

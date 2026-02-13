@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   ApiEndpoint,
   createApiComposer,
@@ -156,6 +156,37 @@ const BasicHandlerExample: React.FC = () => {
   )
 }
 
+const UseEffectExample: React.FC = () => {
+  const [userId, setUserId] = useState(1)
+  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
+    useApiHandler<User>('effect-user')
+
+  // handleApi is a stable reference — safe to include in useEffect deps.
+  // This effect only re-runs when userId changes, not on every render.
+  useEffect(() => {
+    handleApi(() => fetchUser(userId), { staleTime: 5000 })
+  }, [userId, handleApi])
+
+  return (
+    <Card
+      title="useEffect with handleApi — stable refs"
+      hint="handleApi in useEffect deps · staleTime · no infinite loops"
+    >
+      <ButtonRow>
+        <button onClick={() => setUserId(id => id + 1)}>
+          Next user (current: {userId})
+        </button>
+        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+          Reset
+        </button>
+      </ButtonRow>
+      <Status value={status} fetchedAt={fetchedAt} />
+      {isLoading && <div>Loading…</div>}
+      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
+    </Card>
+  )
+}
+
 const OptimisticUpdateExample: React.FC = () => {
   const { data, isLoading, status, handleApi, resetApi } = useApiHandler<User>('optimistic-user')
 
@@ -208,6 +239,35 @@ const ComposerExample: React.FC = () => {
           <li key={post.id}>{post.title}</li>
         )) ?? <li>No posts loaded</li>}
       </ul>
+    </Card>
+  )
+}
+
+const ComposerEffectExample: React.FC = () => {
+  const [postId, setPostId] = useState(1)
+  const { data, isLoading, status, fetchedAt, handleApi, resetApi } = useApi('getUser')
+
+  // Composer's handleApi is also a stable ref — safe in deps
+  useEffect(() => {
+    handleApi({ id: postId }, params => fetchUser(params.id))
+  }, [postId, handleApi])
+
+  return (
+    <Card
+      title="Composer + useEffect — stable refs"
+      hint="typed params · handleApi in useEffect deps · no infinite loops"
+    >
+      <ButtonRow>
+        <button onClick={() => setPostId(id => id + 1)}>
+          Next user (current: {postId})
+        </button>
+        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+          Reset
+        </button>
+      </ButtonRow>
+      <Status value={status} fetchedAt={fetchedAt} />
+      {isLoading && <div>Loading…</div>}
+      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
     </Card>
   )
 }
@@ -322,8 +382,8 @@ export const App: React.FC = () => {
         <div>
           <h1 style={{ margin: 0 }}>Zustand API Manager — Multi-Store Example</h1>
           <p style={{ marginTop: 8 }}>
-            Two isolated stores, each with their own <code>useApiHandler</code>,{' '}
-            <code>useLoadingStates</code>, and <code>createApiComposer</code>. Both use the{' '}
+            Two isolated stores, stable <code>handleApi</code> refs in <code>useEffect</code>,{' '}
+            <code>useLoadingStates</code>, and <code>createApiComposer</code>. Both stores use the{' '}
             <code>&quot;user&quot;</code> key to prove store isolation.
           </p>
         </div>
@@ -339,8 +399,10 @@ export const App: React.FC = () => {
 
         <h3 style={{ margin: '0 0 12px', color: '#1677ff' }}>Default store</h3>
         <BasicHandlerExample />
+        <UseEffectExample />
         <OptimisticUpdateExample />
         <ComposerExample />
+        <ComposerEffectExample />
 
         <h3 style={{ margin: '24px 0 12px', color: '#52c41a' }}>Second store</h3>
         <SecondStoreExample />

@@ -161,7 +161,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
     persist(
       immer((set, get) => ({
         apiStates: {},
-        persistentKeys: {} as Record<string, boolean>,
+        persistentKeys: {},
         middleware: [],
         errorHandlers: [],
 
@@ -228,7 +228,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
           }
           set(draft => {
             draft.apiStates = {}
-            draft.persistentKeys = {} as Record<string, boolean>
+            draft.persistentKeys = {}
           })
         },
 
@@ -430,22 +430,26 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         },
 
         addMiddleware: middleware => {
-          set(state => ({ middleware: [...state.middleware, middleware] }))
+          set(draft => {
+            draft.middleware.push(middleware)
+          })
           return () => {
-            set(state => ({
-              middleware: state.middleware.filter(m => m !== middleware)
-            }))
+            set(draft => {
+              const idx = draft.middleware.indexOf(middleware)
+              if (idx !== -1) draft.middleware.splice(idx, 1)
+            })
           }
         },
 
         addErrorHandler: handler => {
-          set(state => ({
-            errorHandlers: [...state.errorHandlers, handler]
-          }))
+          set(draft => {
+            draft.errorHandlers.push(handler)
+          })
           return () => {
-            set(state => ({
-              errorHandlers: state.errorHandlers.filter(h => h !== handler)
-            }))
+            set(draft => {
+              const idx = draft.errorHandlers.indexOf(handler)
+              if (idx !== -1) draft.errorHandlers.splice(idx, 1)
+            })
           }
         }
       })),

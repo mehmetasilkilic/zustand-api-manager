@@ -67,6 +67,12 @@
   },
   "peerDependencies": {
     "immer": ">=10.0.0",
+    "react": ">=17.0.0",
     "zustand": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

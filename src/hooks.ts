@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { useApiStore } from './store'
 import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
@@ -41,6 +42,9 @@ export const useLoadingStates = (
  * along with functions to trigger the API call and reset its state.
  *
  * This is the primary hook for interacting with individual API endpoints.
+ * The returned `handleApi`, `resetApi`, and `invalidateApi` functions are
+ * referentially stable (wrapped in `useCallback`), so they are safe to use
+ * in `useEffect` dependency arrays and memoized children.
  *
  * @typeParam T - The expected response data type.
  * @param key - The unique identifier for the API endpoint.
@@ -57,7 +61,7 @@ export const useLoadingStates = (
  *
  *   useEffect(() => {
  *     handleApi(() => fetch('/api/user').then(r => r.json()))
- *   }, [])
+ *   }, [handleApi])
  *
  *   if (isLoading) return <Spinner />
  *   if (isError) return <Error message={error?.message} />
@@ -70,10 +74,28 @@ export const useApiHandler = <T>(
   store?: UseBoundStore<StoreApi<ApiStore>>
 ): ApiHandlerResult<T> => {
   const useStore = store ?? useApiStore
+
+  // Only subscribe reactively to the slice that actually changes.
+  // Store methods (handleApi, resetApiState, invalidateApi) are stable
+  // references defined once in create(), so we read them via getState()
+  // to avoid unnecessary subscriptions.
   const apiState = useStore(state => state.apiStates[key])
-  const handleApi = useStore(state => state.handleApi)
-  const resetApiState = useStore(state => state.resetApiState)
-  const invalidateApi = useStore(state => state.invalidateApi)
+
+  const handleApi = useCallback(
+    (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
+      useStore.getState().handleApi<T>(key, apiCall, options),
+    [key, useStore]
+  )
+
+  const resetApi = useCallback(
+    () => useStore.getState().resetApiState(key),
+    [key, useStore]
+  )
+
+  const invalidateApi = useCallback(
+    () => useStore.getState().invalidateApi(key),
+    [key, useStore]
+  )
 
   return {
     status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
@@ -84,10 +106,9 @@ export const useApiHandler = <T>(
     data: (apiState?.data as T | undefined) ?? null,
     error: apiState?.error ?? null,
     fetchedAt: apiState?.fetchedAt ?? null,
-    handleApi: (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
-      handleApi<T>(key, apiCall, options),
-    resetApi: () => resetApiState(key),
-    invalidateApi: () => invalidateApi(key)
+    handleApi,
+    resetApi,
+    invalidateApi
   }
 }
 

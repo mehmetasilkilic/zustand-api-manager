@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useApiStore, createApiStore } from '../store'
+import { createApiStore as createApiStoreFromIndex } from '../index'
 import { FetchStatus } from '../types'
 import type { ApiMiddleware } from '../types'
 
@@ -1320,5 +1321,331 @@ describe('invalidateAll', () => {
   it('is a no-op when store is empty', () => {
     getState().invalidateAll()
     expect(Object.keys(getState().apiStates)).toHaveLength(0)
+  })
+})
+
+// ── createApiStore — custom storage ──────────────────────────
+
+describe('createApiStore — custom storage', () => {
+  it('accepts a custom synchronous storage backend', async () => {
+    const storage: Record<string, string> = {}
+    const customStorage = {
+      getItem: (name: string) => storage[name] ?? null,
+      setItem: (name: string, value: string) => {
+        storage[name] = value
+      },
+      removeItem: (name: string) => {
+        delete storage[name]
+      }
+    }
+
+    const { useStore } = createApiStore({ storageKey: 'custom-sync', storage: customStorage })
+    const apiCall = () => Promise.resolve({ data: 'persisted' })
+    await useStore.getState().handleApi('test', apiCall, { persist: true })
+
+    expect(useStore.getState().apiStates['test'].data).toBe('persisted')
+    expect(useStore.getState().persistentKeys['test']).toBe(true)
+    // Storage should contain the persisted data
+    expect(storage['custom-sync']).toBeDefined()
+    const parsed = JSON.parse(storage['custom-sync'])
+    expect(parsed.state.apiStates['test'].data).toBe('persisted')
+  })
+
+  it('accepts a custom async storage backend', async () => {
+    const storage: Record<string, string> = {}
+    const asyncStorage = {
+      getItem: async (name: string) => storage[name] ?? null,
+      setItem: async (name: string, value: string) => {
+        storage[name] = value
+      },
+      removeItem: async (name: string) => {
+        delete storage[name]
+      }
+    }
+
+    const { useStore } = createApiStore({ storageKey: 'custom-async', storage: asyncStorage })
+    const apiCall = () => Promise.resolve({ data: 'async-data' })
+    await useStore.getState().handleApi('test', apiCall, { persist: true })
+
+    expect(useStore.getState().apiStates['test'].data).toBe('async-data')
+  })
+})
+
+// ── createApiStore from index (factory with bound hooks) ─────
+
+describe('createApiStore from index — factory with bound hooks', () => {
+  it('returns useStore and bound hooks', () => {
+    const result = createApiStoreFromIndex({ storageKey: 'factory-test' })
+    expect(result.useStore).toBeDefined()
+    expect(result.useApiHandler).toBeDefined()
+    expect(result.useLoadingStates).toBeDefined()
+    expect(result.createApiComposer).toBeDefined()
+  })
+
+  it('bound hooks operate on the correct isolated store', async () => {
+    const store = createApiStoreFromIndex({ storageKey: 'factory-isolated' })
+
+    // Use the raw store to verify
+    await store.useStore.getState().handleApi('test', () =>
+      Promise.resolve({ data: 'factory-data' })
+    )
+
+    expect(store.useStore.getState().apiStates['test'].data).toBe('factory-data')
+    // Default store should not have this data
+    expect(useApiStore.getState().apiStates['test']).toBeUndefined()
+  })
+
+  it('factory stores are isolated from each other', async () => {
+    const storeA = createApiStoreFromIndex({ storageKey: 'factory-a' })
+    const storeB = createApiStoreFromIndex({ storageKey: 'factory-b' })
+
+    await storeA.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'a-data' })
+    )
+    await storeB.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'b-data' })
+    )
+
+    expect(storeA.useStore.getState().apiStates['users'].data).toBe('a-data')
+    expect(storeB.useStore.getState().apiStates['users'].data).toBe('b-data')
+  })
+})
+
+// ── middleware — error handling ───────────────────────────────
+
+describe('middleware — error handling', () => {
+  it('propagates error when middleware throws', async () => {
+    const mw: ApiMiddleware = () => async () => {
+      throw new Error('middleware-crash')
+    }
+    getState().addMiddleware(mw)
+
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await expect(
+      getState().handleApi('users', apiCall)
+    ).rejects.toThrow('middleware-crash')
+  })
+
+  it('middleware can modify the api call', async () => {
+    const mw: ApiMiddleware = next => async (key, _apiCall, options) => {
+      // Replace the api call with a different one
+      const modifiedCall = () => Promise.resolve({ data: 'intercepted' as unknown })
+      await next(key, modifiedCall, options)
+    }
+    getState().addMiddleware(mw)
+
+    const apiCall = () => Promise.resolve({ data: 'original' })
+    await getState().handleApi('users', apiCall)
+
+    expect(getState().apiStates['users'].data).toBe('intercepted')
+  })
+
+  it('middleware can short-circuit and not call next', async () => {
+    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+    const mw: ApiMiddleware = () => async () => {
+      // Intentionally do nothing — don't call next
+    }
+    getState().addMiddleware(mw)
+
+    const result = await getState().handleApi('users', apiCall)
+
+    // The apiCall should not have been invoked
+    expect(apiCall).not.toHaveBeenCalled()
+    // State was never touched by baseHandler, so it remains uninitialized
+    // and handleApi returns undefined
+    expect(result).toBeUndefined()
+  })
+
+  it('unsubscribed middleware is not applied to subsequent calls', async () => {
+    const calls: string[] = []
+    const mw: ApiMiddleware = next => async (key, apiCall, options) => {
+      calls.push('mw')
+      await next(key, apiCall, options)
+    }
+
+    const unsub = getState().addMiddleware(mw)
+
+    const apiCall = () => Promise.resolve({ data: 'ok' })
+    await getState().handleApi('first', apiCall)
+    expect(calls).toEqual(['mw'])
+
+    unsub()
+
+    await getState().handleApi('second', apiCall)
+    // Middleware should not have been called again
+    expect(calls).toEqual(['mw'])
+  })
+})
+
+// ── handleApi — timeout + retry interaction ──────────────────
+
+describe('handleApi — timeout + retry interaction', () => {
+  it('timeout triggers during retry backoff and stops retries', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn(() => Promise.reject(new Error('fail')))
+
+    const promise = getState().handleApi('users', apiCall, {
+      retry: 5,
+      timeout: 1500 // timeout after 1.5s — first backoff is 1s, so it should abort during second backoff
+    })
+
+    // First attempt fails immediately, starts 1000ms backoff
+    await vi.advanceTimersByTimeAsync(0)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Advance through first backoff (1000ms)
+    await vi.advanceTimersByTimeAsync(1000)
+    // Second attempt should fire
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    // Second backoff is 2000ms, but timeout fires at 1500ms total
+    // We've used 1000ms already, so timeout fires at 500ms into second backoff
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.runAllTimersAsync()
+    await promise
+
+    const state = getState().apiStates['users']
+    expect(state.status).toBe(FetchStatus.ERROR)
+    expect(state.error!.code).toBe('TIMEOUT')
+    // Should have stopped before exhausting all retries
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
+})
+
+// ── startPolling — edge cases ────────────────────────────────
+
+describe('startPolling — edge cases', () => {
+  it('stop() during an in-flight tick prevents further ticks', async () => {
+    vi.useFakeTimers()
+    let resolveCall: (value: { data: string }) => void
+    let callCount = 0
+    const apiCall = vi.fn(() => {
+      callCount++
+      if (callCount === 1) {
+        return new Promise<{ data: string }>(resolve => {
+          resolveCall = resolve
+        })
+      }
+      return Promise.resolve({ data: 'ok' })
+    })
+
+    const stop = getState().startPolling('users', apiCall, 1000)
+
+    // First tick fires
+    vi.advanceTimersByTime(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    // Stop while first request is in-flight
+    stop()
+
+    // Resolve the in-flight request
+    resolveCall!({ data: 'ok' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Advance more ticks — none should fire
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+
+    vi.useRealTimers()
+  })
+
+  it('handles errors in polled requests without stopping', async () => {
+    vi.useFakeTimers()
+    let callCount = 0
+    const apiCall = vi.fn(() => {
+      callCount++
+      if (callCount === 1) return Promise.reject(new Error('transient'))
+      return Promise.resolve({ data: 'recovered' })
+    })
+
+    const stop = getState().startPolling('users', apiCall, 1000)
+
+    // First tick — fails
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apiCall).toHaveBeenCalledTimes(1)
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+
+    // Second tick — succeeds
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apiCall).toHaveBeenCalledTimes(2)
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+    expect(getState().apiStates['users'].data).toBe('recovered')
+
+    stop()
+    vi.useRealTimers()
+  })
+})
+
+// ── persistence rehydration ──────────────────────────────────
+
+describe('persistence rehydration', () => {
+  it('persisted keys survive store recreation with same storage', async () => {
+    const storage: Record<string, string> = {}
+    const customStorage = {
+      getItem: (name: string) => storage[name] ?? null,
+      setItem: (name: string, value: string) => {
+        storage[name] = value
+      },
+      removeItem: (name: string) => {
+        delete storage[name]
+      }
+    }
+
+    // Create first store and persist data
+    const store1 = createApiStore({ storageKey: 'rehydrate-test', storage: customStorage })
+    await store1.useStore.getState().handleApi('users', () =>
+      Promise.resolve({ data: 'persisted-data' }),
+      { persist: true }
+    )
+
+    expect(store1.useStore.getState().apiStates['users'].data).toBe('persisted-data')
+    expect(storage['rehydrate-test']).toBeDefined()
+
+    // Create a second store with the same key and storage — should rehydrate
+    const store2 = createApiStore({ storageKey: 'rehydrate-test', storage: customStorage })
+
+    // Wait for rehydration (Zustand's persist middleware rehydrates asynchronously)
+    await vi.waitFor(() => {
+      expect(store2.useStore.getState().apiStates['users']).toBeDefined()
+    })
+
+    expect(store2.useStore.getState().apiStates['users'].data).toBe('persisted-data')
+    expect(store2.useStore.getState().persistentKeys['users']).toBe(true)
+  })
+
+  it('non-persisted keys are not rehydrated', async () => {
+    const storage: Record<string, string> = {}
+    const customStorage = {
+      getItem: (name: string) => storage[name] ?? null,
+      setItem: (name: string, value: string) => {
+        storage[name] = value
+      },
+      removeItem: (name: string) => {
+        delete storage[name]
+      }
+    }
+
+    const store1 = createApiStore({ storageKey: 'rehydrate-selective', storage: customStorage })
+    await store1.useStore.getState().handleApi('persisted', () =>
+      Promise.resolve({ data: 'saved' }),
+      { persist: true }
+    )
+    await store1.useStore.getState().handleApi('ephemeral', () =>
+      Promise.resolve({ data: 'not-saved' })
+    )
+
+    // Verify the storage only contains the persisted key
+    const parsed = JSON.parse(storage['rehydrate-selective'])
+    expect(parsed.state.apiStates['persisted']).toBeDefined()
+    expect(parsed.state.apiStates['ephemeral']).toBeUndefined()
+
+    // New store should only have the persisted key
+    const store2 = createApiStore({ storageKey: 'rehydrate-selective', storage: customStorage })
+    await vi.waitFor(() => {
+      expect(store2.useStore.getState().apiStates['persisted']).toBeDefined()
+    })
+    expect(store2.useStore.getState().apiStates['ephemeral']).toBeUndefined()
   })
 })
