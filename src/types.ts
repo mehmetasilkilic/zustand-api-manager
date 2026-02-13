@@ -78,10 +78,16 @@ export interface ApiError extends Error {
  * ```
  */
 export interface ApiCallOptions<T = unknown> {
+  /** Callback invoked when the API call starts (before any cache check or network request). */
+  onStart?: () => void
+  /** Callback invoked when cached data is returned (staleTime hit). Receives the cached data. */
+  onCacheHit?: (data: T) => void
   /** Callback invoked when the API call succeeds. Receives the typed response data. */
   onSuccess?: (data: T) => void
   /** Callback invoked when the API call fails (after all retries are exhausted). Receives the error. */
   onError?: (error: ApiError) => void
+  /** Callback invoked before each retry attempt. Receives the error and the attempt number (0-based). */
+  onBeforeRetry?: (error: ApiError, attempt: number) => void
   /** If `true`, the resulting state will be persisted to `localStorage` and survive page reloads. */
   persist?: boolean
   /** An `AbortSignal` to cancel the request. When aborted, the state transitions to `ERROR` with code `'ABORT_ERR'`. */
@@ -93,6 +99,20 @@ export interface ApiCallOptions<T = unknown> {
    * and return the cached data immediately. Useful for avoiding redundant refetches.
    */
   staleTime?: number
+  /**
+   * When `true`, stale data will be returned immediately while a background revalidation
+   * is triggered. This implements the stale-while-revalidate pattern for better UX.
+   * Only works when data exists and `staleTime` has expired.
+   *
+   * @example
+   * ```ts
+   * handleApi(() => fetchUser(), {
+   *   staleTime: 30_000,
+   *   revalidateOnStale: true // Return stale data instantly, refetch in background
+   * })
+   * ```
+   */
+  revalidateOnStale?: boolean
   /**
    * Data to set optimistically before the request completes.
    * The data will be visible immediately while the request is in-flight.
@@ -162,8 +182,8 @@ export interface ApiCallOptions<T = unknown> {
 }
 
 /**
- * A helper type used with {@link createApiComposer} to define a type-safe mapping
- * between API endpoint parameters and their response types.
+ * Defines a query endpoint (GET, read operations) for use with {@link createApiComposer}.
+ * Query endpoints use the `query` method and support caching with `staleTime`.
  *
  * @typeParam P - The type of the request parameters.
  * @typeParam R - The type of the response data.
@@ -171,13 +191,35 @@ export interface ApiCallOptions<T = unknown> {
  * @example
  * ```ts
  * interface MyApi {
- *   getUser: ApiEndpoint<{ id: number }, User>
- *   listPosts: ApiEndpoint<void, Post[]>
+ *   getUser: ApiQueryEndpoint<{ id: number }, User>
+ *   listPosts: ApiQueryEndpoint<void, Post[]>
  * }
  * ```
  */
-export interface ApiEndpoint<P, R> {
+export interface ApiQueryEndpoint<P, R> {
+  _type: 'query'
   params: P
+  response: R
+}
+
+/**
+ * Defines a mutation endpoint (POST, PUT, DELETE, PATCH) for use with {@link createApiComposer}.
+ * Mutation endpoints use the `mutate` pattern and bind the mutation function at composer creation.
+ *
+ * @typeParam V - The type of the variables/payload.
+ * @typeParam R - The type of the response data.
+ *
+ * @example
+ * ```ts
+ * interface MyApi {
+ *   createUser: ApiMutationEndpoint<CreateUserPayload, User>
+ *   updatePost: ApiMutationEndpoint<UpdatePostPayload, Post>
+ * }
+ * ```
+ */
+export interface ApiMutationEndpoint<V, R> {
+  _type: 'mutation'
+  variables: V
   response: R
 }
 
@@ -341,6 +383,31 @@ export interface ApiStore {
    * @returns A function to unsubscribe (remove) the error handler.
    */
   addErrorHandler: (handler: (error: ApiError, key: string) => void) => () => void
+
+  /**
+   * Cancel all in-flight requests across all API keys.
+   * Each request will transition to ERROR state with code 'ABORT_ERR'.
+   *
+   * @example
+   * ```ts
+   * // Cancel all requests (useful on logout or navigation)
+   * useApiStore.getState().cancelAll()
+   * ```
+   */
+  cancelAll: () => void
+
+  /**
+   * Cancel a specific in-flight request by its key.
+   * The request will transition to ERROR state with code 'ABORT_ERR'.
+   *
+   * @param key - The unique identifier for the API endpoint to cancel.
+   *
+   * @example
+   * ```ts
+   * useApiStore.getState().cancelRequest('users')
+   * ```
+   */
+  cancelRequest: (key: string) => void
 }
 
 /**
@@ -355,6 +422,10 @@ export interface ApiStoreConfig {
     setItem: (name: string, value: string) => void | Promise<void>
     removeItem: (name: string) => void | Promise<void>
   }
+  /** Enable Zustand DevTools for debugging. Defaults to `false`. Only works in development environments. */
+  enableDevtools?: boolean
+  /** Custom name for the DevTools instance. Defaults to the storageKey value. */
+  devtoolsName?: string
 }
 
 /**
@@ -398,45 +469,111 @@ export interface ApiHandlerResult<T> {
 }
 
 /**
- * The return type of the hook created by {@link createApiComposer}.
- * Provides reactive access to the API state along with a type-safe `handleApi` function.
+ * The return type of {@link useApiMutation}.
+ * Provides reactive access to mutation state with a `mutate` function optimized for write operations.
  *
  * @typeParam T - The response data type.
- * @typeParam P - The request parameters type. Defaults to `void` (no params).
+ * @typeParam V - The variables/payload type passed to the mutation.
  */
-export interface ApiComposerResult<T, P = void> {
-  /** The response data, or `null` if not yet loaded or on error. */
+export interface ApiMutationResult<T, V = void> {
+  /** The response data from the last successful mutation, or `null`. */
   data: T | null
-  /** The raw lifecycle status of the API request. */
+  /** The raw lifecycle status of the mutation. */
   status: FetchStatus
-  /** `true` if no request has been made yet for this key. */
+  /** `true` if no mutation has been called yet for this key. */
   isIdle: boolean
-  /** `true` if a request is currently in progress. */
+  /** `true` if a mutation is currently in progress. */
   isLoading: boolean
-  /** `true` if the last request completed successfully. */
+  /** `true` if the last mutation completed successfully. */
   isSuccess: boolean
-  /** `true` if the last request failed. */
+  /** `true` if the last mutation failed. */
   isError: boolean
-  /** The error from the last failed request, or `null`. */
+  /** The error from the last failed mutation, or `null`. */
   error: ApiError | null
-  /** Timestamp (ms since epoch) of the last successful fetch, or `null`. */
-  fetchedAt: number | null
   /**
-   * Trigger an API call for this endpoint. The `apiCall` function receives
-   * the typed parameters and must return `{ data: T }`.
+   * Trigger a mutation with the given variables/payload.
    *
-   * @param params - The typed parameters for the API call.
-   * @param apiCall - A function that accepts typed params and returns the response.
+   * @param variables - The payload to pass to the mutation function.
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
    * @returns The response data on success, or `undefined` otherwise.
    */
-  handleApi: (
-    ...args: P extends void
-      ? [apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions<T>]
-      : [params: P, apiCall: (params: P) => Promise<{ data: T }>, options?: ApiCallOptions<T>]
+  mutate: (
+    ...args: V extends void
+      ? [options?: ApiCallOptions<T>]
+      : [variables: V, options?: ApiCallOptions<T>]
   ) => Promise<T | undefined>
-  /** Reset this endpoint's state back to idle and remove it from persistence. */
-  resetApi: () => void
-  /** Mark this endpoint's cache as stale so the next call with `staleTime` will refetch. */
-  invalidateApi: () => void
+  /** Reset this mutation's state back to idle. */
+  reset: () => void
+}
+
+/**
+ * Configuration for {@link createApiComposer} to bind mutation functions.
+ * Pass mutation functions for each mutation endpoint in your API structure.
+ *
+ * @typeParam TApiStructure - The API structure interface.
+ *
+ * @example
+ * ```ts
+ * const config: ApiComposerConfig<MyApi> = {
+ *   mutations: {
+ *     createUser: (payload) => api.createUser(payload),
+ *     updatePost: (payload) => api.updatePost(payload)
+ *   }
+ * }
+ * ```
+ */
+export interface ApiComposerConfig<TApiStructure> {
+  mutations?: {
+    [K in keyof TApiStructure]?: TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
+      ? (variables: V) => Promise<{ data: R }>
+      : never
+  }
+}
+
+/**
+ * Result type for query endpoints in the composer.
+ * Returned when accessing a query endpoint via the composed hook.
+ *
+ * @typeParam R - The response data type.
+ * @typeParam P - The request parameters type.
+ */
+export interface ApiComposerQueryResult<R, P = void> {
+  data: R | null
+  status: FetchStatus
+  isIdle: boolean
+  isLoading: boolean
+  isSuccess: boolean
+  isError: boolean
+  error: ApiError | null
+  fetchedAt: number | null
+  query: (
+    ...args: P extends void
+      ? [apiCall: (params: P) => Promise<{ data: R }>, options?: ApiCallOptions<R>]
+      : [params: P, apiCall: (params: P) => Promise<{ data: R }>, options?: ApiCallOptions<R>]
+  ) => Promise<R | undefined>
+  reset: () => void
+  invalidate: () => void
+}
+
+/**
+ * Result type for mutation endpoints in the composer.
+ * Returned when accessing a mutation endpoint via the composed hook.
+ *
+ * @typeParam R - The response data type.
+ * @typeParam V - The variables/payload type.
+ */
+export interface ApiComposerMutationResult<R, V = void> {
+  data: R | null
+  status: FetchStatus
+  isIdle: boolean
+  isLoading: boolean
+  isSuccess: boolean
+  isError: boolean
+  error: ApiError | null
+  mutate: (
+    ...args: V extends void
+      ? [options?: ApiCallOptions<R>]
+      : [variables: V, options?: ApiCallOptions<R>]
+  ) => Promise<R | undefined>
+  reset: () => void
 }

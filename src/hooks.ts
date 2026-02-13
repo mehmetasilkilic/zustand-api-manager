@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
-import { ApiCallOptions, ApiHandlerResult, ApiStore, FetchStatus } from './types'
+import { ApiCallOptions, ApiHandlerResult, ApiMutationResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
@@ -38,10 +38,10 @@ export const useLoadingStates = (
 }
 
 /**
- * A hook that provides reactive access to a single API endpoint's state
- * along with functions to trigger the API call and reset its state.
+ * A hook for managing API queries (GET requests, read operations).
+ * Provides reactive access to query state along with functions to trigger,
+ * reset, and invalidate the query.
  *
- * This is the primary hook for interacting with individual API endpoints.
  * The returned `handleApi`, `resetApi`, and `invalidateApi` functions are
  * referentially stable (wrapped in `useCallback`), so they are safe to use
  * in `useEffect` dependency arrays and memoized children.
@@ -57,7 +57,7 @@ export const useLoadingStates = (
  * interface User { id: number; name: string }
  *
  * function UserProfile() {
- *   const { data, isLoading, isError, error, handleApi, resetApi } = useApiHandler<User>('getUser')
+ *   const { data, isLoading, isError, error, handleApi, resetApi } = useApiQuery<User>('getUser')
  *
  *   useEffect(() => {
  *     handleApi(() => fetch('/api/user').then(r => r.json()))
@@ -69,7 +69,7 @@ export const useLoadingStates = (
  * }
  * ```
  */
-export const useApiHandler = <T>(
+export const useApiQuery = <T>(
   key: string,
   store?: UseBoundStore<StoreApi<ApiStore>>
 ): ApiHandlerResult<T> => {
@@ -87,15 +87,9 @@ export const useApiHandler = <T>(
     [key, useStore]
   )
 
-  const resetApi = useCallback(
-    () => useStore.getState().resetApiState(key),
-    [key, useStore]
-  )
+  const resetApi = useCallback(() => useStore.getState().resetApiState(key), [key, useStore])
 
-  const invalidateApi = useCallback(
-    () => useStore.getState().invalidateApi(key),
-    [key, useStore]
-  )
+  const invalidateApi = useCallback(() => useStore.getState().invalidateApi(key), [key, useStore])
 
   return {
     status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
@@ -155,7 +149,7 @@ export const usePolling = <T>(
   store?: UseBoundStore<StoreApi<ApiStore>>
 ): ApiHandlerResult<T> => {
   const useStore = store ?? useApiStore
-  const handler = useApiHandler<T>(key, useStore)
+  const handler = useApiQuery<T>(key, useStore)
 
   // Keep apiCall and options fresh without restarting the polling interval.
   const apiCallRef = useRef(apiCall)
@@ -189,3 +183,154 @@ export const usePolling = <T>(
   return handler
 }
 
+/**
+ * A hook for managing API mutations (POST, PUT, DELETE, PATCH operations).
+ * Unlike `useApiHandler` which is designed for queries (GET), this hook is
+ * optimized for mutations with better semantics (mutate instead of handleApi).
+ *
+ * Mutations don't use caching by default and provide a simpler API focused
+ * on write operations with variables/payload.
+ *
+ * @typeParam T - The expected response data type.
+ * @typeParam V - The variables/payload type to pass to the mutation function.
+ * @param key - The unique identifier for the mutation endpoint.
+ * @param mutationFn - A function that accepts variables and returns a promise resolving to `{ data: T }`.
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
+ * @returns An {@link ApiMutationResult} containing the current state and a `mutate` function.
+ *
+ * @example
+ * ```tsx
+ * interface CreateUserPayload { name: string; email: string }
+ * interface User { id: number; name: string; email: string }
+ *
+ * function CreateUserForm() {
+ *   const { mutate, isLoading, isSuccess, data, error } = useApiMutation<User, CreateUserPayload>(
+ *     'createUser',
+ *     (payload) => api.post('/users', payload)
+ *   )
+ *
+ *   const handleSubmit = async (formData: CreateUserPayload) => {
+ *     const newUser = await mutate(formData, {
+ *       onSuccess: (user) => console.log('Created:', user),
+ *       onError: (err) => console.error('Failed:', err)
+ *     })
+ *   }
+ *
+ *   return (
+ *     <form onSubmit={e => { e.preventDefault(); handleSubmit(formData) }}>
+ *       {isLoading && <Spinner />}
+ *       {isSuccess && <div>User created: {data?.name}</div>}
+ *       {error && <div>Error: {error.message}</div>}
+ *     </form>
+ *   )
+ * }
+ * ```
+ */
+export const useApiMutation = <T, V = void>(
+  key: string,
+  mutationFn: (variables: V) => Promise<{ data: T }>,
+  store?: UseBoundStore<StoreApi<ApiStore>>
+): ApiMutationResult<T, V> => {
+  const useStore = store ?? useApiStore
+
+  // Only subscribe reactively to the slice that actually changes
+  const apiState = useStore(state => state.apiStates[key])
+
+  const mutationFnRef = useRef(mutationFn)
+  mutationFnRef.current = mutationFn
+
+  const mutate = useCallback(
+    (...args: unknown[]) => {
+      let variables: V
+      let options: ApiCallOptions<T> | undefined
+
+      // For void variables: mutate(options?)
+      // For non-void variables: mutate(variables, options?)
+      if (
+        args.length === 0 ||
+        (args.length === 1 && typeof args[0] === 'object' && 'onSuccess' in (args[0] as object))
+      ) {
+        variables = undefined as V
+        options = args[0] as ApiCallOptions<T> | undefined
+      } else {
+        variables = args[0] as V
+        options = args[1] as ApiCallOptions<T> | undefined
+      }
+
+      return useStore.getState().handleApi<T>(key, () => mutationFnRef.current(variables), options)
+    },
+    [key, useStore]
+  )
+
+  const reset = useCallback(() => useStore.getState().resetApiState(key), [key, useStore])
+
+  return {
+    data: (apiState?.data as T | undefined) ?? null,
+    status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
+    isIdle: !apiState || apiState.status === FetchStatus.IDLE,
+    isLoading: apiState?.status === FetchStatus.LOADING,
+    isSuccess: apiState?.status === FetchStatus.SUCCESS,
+    isError: apiState?.status === FetchStatus.ERROR,
+    error: apiState?.error ?? null,
+    mutate,
+    reset
+  }
+}
+
+/**
+ * A hook that provides a `prefetch` function for preloading data before it's needed.
+ * Useful for optimistic data loading, hover states, or preloading for next pages.
+ *
+ * Prefetched data is stored in the cache and can be configured with `staleTime`
+ * to avoid redundant refetching.
+ *
+ * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
+ * @returns An object with a `prefetch` function.
+ *
+ * @example
+ * ```tsx
+ * function UserList() {
+ *   const { prefetch } = usePrefetch()
+ *
+ *   const handleMouseEnter = (userId: number) => {
+ *     // Prefetch user details on hover
+ *     prefetch(`user-${userId}`, () => api.getUser(userId), {
+ *       staleTime: 60_000
+ *     })
+ *   }
+ *
+ *   return (
+ *     <ul>
+ *       {users.map(user => (
+ *         <li key={user.id} onMouseEnter={() => handleMouseEnter(user.id)}>
+ *           {user.name}
+ *         </li>
+ *       ))}
+ *     </ul>
+ *   )
+ * }
+ * ```
+ */
+export const usePrefetch = (store?: UseBoundStore<StoreApi<ApiStore>>) => {
+  const useStore = store ?? useApiStore
+
+  const prefetch = useCallback(
+    <T>(
+      key: string,
+      apiCall: () => Promise<{ data: T }>,
+      options?: Omit<ApiCallOptions<T>, 'onSuccess' | 'onError' | 'onSettled'>
+    ) => {
+      // Silently prefetch without triggering callbacks
+      return useStore.getState().handleApi<T>(key, apiCall, {
+        ...options,
+        // Don't call user callbacks during prefetch
+        onSuccess: undefined,
+        onError: undefined,
+        onSettled: undefined
+      })
+    },
+    [useStore]
+  )
+
+  return { prefetch }
+}

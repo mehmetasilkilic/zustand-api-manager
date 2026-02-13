@@ -2,13 +2,45 @@
 
 [![npm version](https://img.shields.io/npm/v/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
 [![downloads](https://img.shields.io/npm/dm/zustand-api-manager.svg)](https://www.npmjs.com/package/zustand-api-manager)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/zustand-api-manager)](https://bundlephobia.com/package/zustand-api-manager)
+[![license](https://img.shields.io/npm/l/zustand-api-manager.svg)](https://github.com/mehmetasilkilic/zustand-api-manager/blob/main/LICENSE)
 [![GitHub](https://img.shields.io/github/stars/mehmetasilkilic/zustand-api-manager?style=social)](https://github.com/mehmetasilkilic/zustand-api-manager)
 
-A powerful and flexible API state management solution built on top of Zustand.
+A powerful, lightweight, and flexible API state management solution built on top of Zustand.
+
+**Why Zustand API Manager?**
+- 🪶 **Lightweight** — Built on Zustand, much smaller than React Query
+- 🎯 **Simple API** — Fewer concepts to learn, more productive
+- ⚡ **High Performance** — Selective subscriptions, stable references
+- 🔧 **Flexible** — Works standalone or with existing Zustand stores
+- 📘 **TypeScript First** — Full type safety out of the box
+- 🎨 **DevTools** — Built-in Zustand DevTools integration
+
+## Quick Start
+
+```typescript
+import { useApiQuery } from 'zustand-api-manager'
+
+function UserProfile({ userId }) {
+  const { data, isLoading, handleApi } = useApiQuery<User>('user')
+
+  useEffect(() => {
+    handleApi(() => fetchUser(userId), {
+      staleTime: 60_000, // Cache for 1 minute
+      retry: 2 // Retry twice on failure
+    })
+  }, [userId, handleApi])
+
+  if (isLoading) return <Loading />
+  return <div>{data?.name}</div>
+}
+```
 
 ## Table of Contents
 
 - [Installation](#installation)
+- [Why Choose This](#why-choose-this)
+- [Comparison](#comparison)
 - [Features](#features)
 - [Usage](#usage)
   - [Basic Usage](#basic-usage)
@@ -40,6 +72,51 @@ npm install zustand-api-manager zustand immer
 
 `zustand` and `immer` are peer dependencies and must be installed alongside the package.
 
+## Why Choose This?
+
+### vs React Query / TanStack Query
+- ✅ **Smaller bundle size** (~10KB vs ~40KB gzipped)
+- ✅ **Simpler API** with fewer concepts
+- ✅ **Built on Zustand** if you're already using it
+- ✅ **Better TypeScript inference** out of the box
+- ⚠️ No automatic background refetching (use `usePolling` or `revalidateOnStale`)
+
+### vs SWR
+- ✅ **More features** (mutations, middleware, devtools)
+- ✅ **Store isolation** for multi-tenant apps
+- ✅ **Better error handling** with retry strategies
+- ✅ **Optimistic updates** with automatic rollback
+- ≈ Similar bundle size and performance
+
+### vs Redux Toolkit Query
+- ✅ **Much simpler** setup and API
+- ✅ **Smaller bundle** and less boilerplate
+- ✅ **Works without Redux** ecosystem
+- ✅ **Faster learning curve**
+- ⚠️ Less opinionated (more flexibility, less structure)
+
+## Comparison
+
+| Feature | Zustand API Manager | React Query | SWR | RTK Query |
+|---------|:------------------:|:-----------:|:---:|:---------:|
+| Bundle Size (gzip) | ~10KB | ~40KB | ~12KB | ~35KB |
+| TypeScript | ✅ | ✅ | ✅ | ✅ |
+| Queries | ✅ | ✅ | ✅ | ✅ |
+| Mutations | ✅ | ✅ | ⚠️ | ✅ |
+| Caching | ✅ | ✅ | ✅ | ✅ |
+| Polling | ✅ | ✅ | ✅ | ✅ |
+| Retry | ✅ | ✅ | ✅ | ✅ |
+| Optimistic Updates | ✅ | ✅ | ✅ | ✅ |
+| Dedupe | ✅ | ✅ | ✅ | ✅ |
+| DevTools | ✅ | ✅ | ❌ | ✅ |
+| Store Isolation | ✅ | ⚠️ | ❌ | ❌ |
+| Global Config | ✅ | ✅ | ✅ | ✅ |
+| Prefetching | ✅ | ✅ | ✅ | ✅ |
+| SSR | ✅ | ✅ | ✅ | ✅ |
+| React Native | ✅ | ✅ | ✅ | ✅ |
+| Learning Curve | Easy | Medium | Easy | Hard |
+| Setup Complexity | Low | Medium | Low | High |
+
 ## Features
 
 - Easy-to-use API state management
@@ -67,6 +144,14 @@ npm install zustand-api-manager zustand immer
 - SSR-safe (no `localStorage` access on the server)
 - Factory function for multiple fully isolated store instances with pre-bound hooks
 - TypeScript support with strong typing (including typed `onSuccess` callbacks)
+- **NEW:** `useApiMutation` hook for mutations with better semantics
+- **NEW:** Global configuration with `configureApiStore`
+- **NEW:** Extended lifecycle hooks: `onStart`, `onBeforeRetry`, `onCacheHit`
+- **NEW:** `usePrefetch` for preloading data
+- **NEW:** `cancelAll` and `cancelRequest` for request cancellation
+- **NEW:** `revalidateOnStale` for stale-while-revalidate pattern
+- **NEW:** DevTools integration for debugging
+- **NEW:** Comprehensive examples and documentation
 
 ## Usage
 
@@ -75,10 +160,10 @@ npm install zustand-api-manager zustand immer
 1. Import the necessary functions:
 
 ```typescript
-import { useApiHandler, FetchStatus } from "zustand-api-manager";
+import { useApiQuery, FetchStatus } from "zustand-api-manager";
 ```
 
-2. Use the `useApiHandler` hook in your components:
+2. Use the `useApiQuery` hook for queries (GET requests):
 
 ```typescript
 interface UserData {
@@ -88,7 +173,7 @@ interface UserData {
 
 function MyComponent() {
   const { data, isIdle, isLoading, isError, status, handleApi } =
-    useApiHandler<UserData>("user");
+    useApiQuery<UserData>("user");
 
   const params = { id: 13 };
 
@@ -782,6 +867,14 @@ The hooks are designed for minimal re-renders:
 - **Stable function references** — `handleApi`, `resetApi`, and `invalidateApi` are wrapped in `useCallback` and only change when the `key` or `store` argument changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
 - **No extra subscriptions for store methods** — Store actions like `handleApi`, `resetApiState`, and `invalidateApi` are read via `getState()` inside callbacks rather than creating reactive subscriptions, reducing overhead.
 
+## Documentation
+
+- 📘 [API Reference](./docs/api-reference.md) - Complete API documentation
+- 🔄 [Migration Guide](./docs/migration.md) - Migrating from React Query, SWR, RTK Query
+- 🐛 [Troubleshooting](./docs/troubleshooting.md) - Common issues and solutions
+- ⚡ [Performance Guide](./docs/performance.md) - Optimization best practices
+- 💡 [Examples](./examples) - Real-world usage examples
+
 ## TypeScript Support
 
 This package is written in TypeScript and provides strong typing out of the box.
@@ -790,6 +883,21 @@ This package is written in TypeScript and provides strong typing out of the box.
 - `useApiHandler<T>` returns a fully typed `ApiHandlerResult<T>`
 - `createApiComposer<TApiStructure>()` infers parameter and response types for each endpoint
 - All exported types are available: `ApiState`, `ApiError`, `ApiCallOptions`, `ApiEndpoint`, `ApiStore`, `ApiHandlerResult`, `ApiComposerResult`, `FetchStatus`, etc.
+
+## API Naming
+
+**Clean & Consistent API (v2.0+):**
+```typescript
+import { useApiQuery, useApiMutation } from 'zustand-api-manager'
+
+// Queries (GET, read operations)
+const { data } = useApiQuery<User>('user')
+
+// Mutations (POST, PUT, DELETE, write operations)
+const { mutate } = useApiMutation<User, UpdatePayload>('updateUser', updateUserFn)
+```
+
+> **Note:** If you're upgrading from v1.0, `useApiHandler` has been renamed to `useApiQuery`. Simply find-and-replace in your codebase.
 
 ## Contributing
 

@@ -999,12 +999,8 @@ describe('store isolation', () => {
     const storeA = createApiStore({ storageKey: 'store-a' })
     const storeB = createApiStore({ storageKey: 'store-b' })
 
-    await storeA.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'from-a' })
-    )
-    await storeB.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'from-b' })
-    )
+    await storeA.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'from-a' }))
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'from-b' }))
 
     expect(storeA.useStore.getState().apiStates['users'].data).toBe('from-a')
     expect(storeB.useStore.getState().apiStates['users'].data).toBe('from-b')
@@ -1024,9 +1020,7 @@ describe('store isolation', () => {
     const promiseA = storeA.useStore.getState().handleApi('users', slowCallA)
 
     // storeB makes a quick request with the same key — should not affect storeA
-    await storeB.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'fast-b' })
-    )
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'fast-b' }))
 
     // Resolve storeA's request — should NOT be treated as stale
     resolveA!({ data: 'slow-a' })
@@ -1042,7 +1036,10 @@ describe('store isolation', () => {
 
     let resolveA: (value: { data: string }) => void
     const callA = vi.fn(
-      () => new Promise<{ data: string }>(resolve => { resolveA = resolve })
+      () =>
+        new Promise<{ data: string }>(resolve => {
+          resolveA = resolve
+        })
     )
     const callB = vi.fn(() => Promise.resolve({ data: 'b' }))
 
@@ -1080,9 +1077,9 @@ describe('store isolation', () => {
 describe('handleApi — throwOnError', () => {
   it('rejects with ApiError when throwOnError is true and request fails', async () => {
     const apiCall = () => Promise.reject(new Error('fail'))
-    await expect(
-      getState().handleApi('users', apiCall, { throwOnError: true })
-    ).rejects.toThrow('fail')
+    await expect(getState().handleApi('users', apiCall, { throwOnError: true })).rejects.toThrow(
+      'fail'
+    )
   })
 
   it('resolves with data when throwOnError is true and request succeeds', async () => {
@@ -1262,7 +1259,7 @@ describe('createApiStore from index — factory with bound hooks', () => {
   it('returns useStore and bound hooks', () => {
     const result = createApiStoreFromIndex({ storageKey: 'factory-test' })
     expect(result.useStore).toBeDefined()
-    expect(result.useApiHandler).toBeDefined()
+    expect(result.useApiQuery).toBeDefined()
     expect(result.useLoadingStates).toBeDefined()
     expect(result.createApiComposer).toBeDefined()
   })
@@ -1271,9 +1268,9 @@ describe('createApiStore from index — factory with bound hooks', () => {
     const store = createApiStoreFromIndex({ storageKey: 'factory-isolated' })
 
     // Use the raw store to verify
-    await store.useStore.getState().handleApi('test', () =>
-      Promise.resolve({ data: 'factory-data' })
-    )
+    await store.useStore
+      .getState()
+      .handleApi('test', () => Promise.resolve({ data: 'factory-data' }))
 
     expect(store.useStore.getState().apiStates['test'].data).toBe('factory-data')
     // Default store should not have this data
@@ -1284,12 +1281,8 @@ describe('createApiStore from index — factory with bound hooks', () => {
     const storeA = createApiStoreFromIndex({ storageKey: 'factory-a' })
     const storeB = createApiStoreFromIndex({ storageKey: 'factory-b' })
 
-    await storeA.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'a-data' })
-    )
-    await storeB.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'b-data' })
-    )
+    await storeA.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'a-data' }))
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'b-data' }))
 
     expect(storeA.useStore.getState().apiStates['users'].data).toBe('a-data')
     expect(storeB.useStore.getState().apiStates['users'].data).toBe('b-data')
@@ -1306,16 +1299,15 @@ describe('middleware — error handling', () => {
     getState().addMiddleware(mw)
 
     const apiCall = () => Promise.resolve({ data: 'ok' })
-    await expect(
-      getState().handleApi('users', apiCall)
-    ).rejects.toThrow('middleware-crash')
+    await expect(getState().handleApi('users', apiCall)).rejects.toThrow('middleware-crash')
   })
 
   it('middleware can modify the api call', async () => {
     const mw: ApiMiddleware = next => async (key, _apiCall, options) => {
       // Replace the api call with a different one
-      const modifiedCall = () => Promise.resolve({ data: 'intercepted' as unknown })
-      await next(key, modifiedCall, options)
+      const modifiedCall = () => Promise.resolve({ data: 'intercepted' })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await next(key, modifiedCall as any, options as any)
     }
     getState().addMiddleware(mw)
 
@@ -1410,9 +1402,9 @@ describe('handleApi — onSettled with middleware crash', () => {
     getState().addMiddleware(mw)
 
     const apiCall = () => Promise.resolve({ data: 'ok' })
-    await expect(
-      getState().handleApi('users', apiCall, { onSettled })
-    ).rejects.toThrow('middleware-crash')
+    await expect(getState().handleApi('users', apiCall, { onSettled })).rejects.toThrow(
+      'middleware-crash'
+    )
 
     expect(onSettled).toHaveBeenCalledOnce()
   })
@@ -1500,10 +1492,9 @@ describe('persistence rehydration', () => {
 
     // Create first store and persist data
     const store1 = createApiStore({ storageKey: 'rehydrate-test', storage: customStorage })
-    await store1.useStore.getState().handleApi('users', () =>
-      Promise.resolve({ data: 'persisted-data' }),
-      { persist: true }
-    )
+    await store1.useStore
+      .getState()
+      .handleApi('users', () => Promise.resolve({ data: 'persisted-data' }), { persist: true })
 
     expect(store1.useStore.getState().apiStates['users'].data).toBe('persisted-data')
     expect(storage['rehydrate-test']).toBeDefined()
@@ -1533,13 +1524,12 @@ describe('persistence rehydration', () => {
     }
 
     const store1 = createApiStore({ storageKey: 'rehydrate-selective', storage: customStorage })
-    await store1.useStore.getState().handleApi('persisted', () =>
-      Promise.resolve({ data: 'saved' }),
-      { persist: true }
-    )
-    await store1.useStore.getState().handleApi('ephemeral', () =>
-      Promise.resolve({ data: 'not-saved' })
-    )
+    await store1.useStore
+      .getState()
+      .handleApi('persisted', () => Promise.resolve({ data: 'saved' }), { persist: true })
+    await store1.useStore
+      .getState()
+      .handleApi('ephemeral', () => Promise.resolve({ data: 'not-saved' }))
 
     // Verify the storage only contains the persisted key
     const parsed = JSON.parse(storage['rehydrate-selective'])

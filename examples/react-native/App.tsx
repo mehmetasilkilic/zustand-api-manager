@@ -10,11 +10,11 @@ import {
   View
 } from 'react-native'
 import {
-  ApiEndpoint,
+  ApiQueryEndpoint,
   createApiComposer,
   createApiStore,
   FetchStatus,
-  useApiHandler,
+  useApiQuery,
   useApiStore,
   useLoadingStates
 } from 'zustand-api-manager'
@@ -77,7 +77,7 @@ const updateUser = (user: User) =>
 // Second store ----------------------------------------------------------------
 
 interface SecondApiStructure {
-  getComments: ApiEndpoint<void, Comment[]>
+  getComments: ApiQueryEndpoint<void, Comment[]>
 }
 
 const secondStore = createApiStore({ storageKey: 'second-store' })
@@ -86,8 +86,8 @@ const useSecondApi = secondStore.createApiComposer<SecondApiStructure>()
 // Default store composer ------------------------------------------------------
 
 interface DefaultApiStructure {
-  getUser: ApiEndpoint<{ id: number }, User>
-  getPosts: ApiEndpoint<void, Post[]>
+  getUser: ApiQueryEndpoint<{ id: number }, User>
+  getPosts: ApiQueryEndpoint<void, Post[]>
 }
 
 const useApi = createApiComposer<DefaultApiStructure>()
@@ -136,7 +136,7 @@ const SecondStoreLoading: React.FC = () => {
 
 const BasicHandlerExample: React.FC = () => {
   const { data, status, isIdle, isLoading, fetchedAt, handleApi, resetApi } =
-    useApiHandler<User>('user')
+    useApiQuery<User>('user')
 
   const loadUser = async () => {
     const user = await handleApi(() => fetchUser(7), {
@@ -149,7 +149,7 @@ const BasicHandlerExample: React.FC = () => {
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>useApiHandler — default store</Text>
+      <Text style={styles.cardTitle}>useApiQuery — default store</Text>
       <Text style={styles.featureHint}>staleTime · persist · fetchedAt · resetApi</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
@@ -175,7 +175,7 @@ const BasicHandlerExample: React.FC = () => {
 const UseEffectExample: React.FC = () => {
   const [userId, setUserId] = useState(1)
   const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    useApiHandler<User>('effect-user')
+    useApiQuery<User>('effect-user')
 
   // handleApi is a stable reference — safe to include in useEffect deps.
   // This effect only re-runs when userId changes, not on every render.
@@ -214,7 +214,7 @@ const UseEffectExample: React.FC = () => {
 }
 
 const OptimisticUpdateExample: React.FC = () => {
-  const { data, isLoading, status, handleApi, resetApi } = useApiHandler<User>('optimistic-user')
+  const { data, isLoading, status, handleApi, resetApi } = useApiQuery<User>('optimistic-user')
 
   const saveUser = () => {
     const optimistic: User = { id: 42, username: 'optimistic-jane' }
@@ -252,17 +252,17 @@ const OptimisticUpdateExample: React.FC = () => {
 }
 
 const ComposerExample: React.FC = () => {
-  const { data: posts, isLoading, isError, status, fetchedAt, handleApi, resetApi } =
+  const { data: posts, isLoading, isError, status, fetchedAt, query, reset } =
     useApi('getPosts')
 
   const loadPosts = () => {
-    void handleApi(() => fetchPosts(), { staleTime: 10000 })
+    void query(() => fetchPosts(), { staleTime: 10000 })
   }
 
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>createApiComposer — default store</Text>
-      <Text style={styles.featureHint}>staleTime · typed composer · resetApi</Text>
+      <Text style={styles.featureHint}>staleTime · typed composer · reset</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -274,7 +274,7 @@ const ComposerExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Reset"
-            onPress={resetApi}
+            onPress={reset}
             disabled={status === FetchStatus.IDLE}
             color="#999"
           />
@@ -295,17 +295,17 @@ const ComposerExample: React.FC = () => {
 }
 
 const SecondStoreExample: React.FC = () => {
-  const { data: comments, isLoading, status, fetchedAt, handleApi, resetApi, invalidateApi } =
+  const { data: comments, isLoading, status, fetchedAt, query, reset, invalidate } =
     useSecondApi('getComments')
 
   const loadComments = () => {
-    void handleApi(() => fetchComments(), { staleTime: 8000 })
+    void query(() => fetchComments(), { staleTime: 8000 })
   }
 
   return (
     <View style={[styles.card, { borderColor: '#b7eb8f', borderWidth: 1 }]}>
       <Text style={styles.cardTitle}>createApiComposer — second store</Text>
-      <Text style={styles.featureHint}>isolated store · staleTime · invalidateApi</Text>
+      <Text style={styles.featureHint}>isolated store · staleTime · invalidate</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
@@ -318,7 +318,7 @@ const SecondStoreExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Invalidate"
-            onPress={() => invalidateApi()}
+            onPress={() => invalidate()}
             disabled={status === FetchStatus.IDLE}
             color="#52c41a"
           />
@@ -326,7 +326,7 @@ const SecondStoreExample: React.FC = () => {
         <View style={styles.buttonWrapper}>
           <Button
             title="Reset"
-            onPress={resetApi}
+            onPress={reset}
             disabled={status === FetchStatus.IDLE}
             color="#999"
           />
@@ -347,7 +347,7 @@ const SecondStoreExample: React.FC = () => {
 
 const SecondStoreHandlerExample: React.FC = () => {
   const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    secondStore.useApiHandler<User>('user')
+    secondStore.useApiQuery<User>('user')
 
   const loadUser = async () => {
     const user = await handleApi(() => fetchUser(99), { staleTime: 5000 })
@@ -356,7 +356,7 @@ const SecondStoreHandlerExample: React.FC = () => {
 
   return (
     <View style={[styles.card, { borderColor: '#b7eb8f', borderWidth: 1 }]}>
-      <Text style={styles.cardTitle}>useApiHandler — second store (same 'user' key)</Text>
+      <Text style={styles.cardTitle}>useApiQuery — second store (same 'user' key)</Text>
       <Text style={styles.featureHint}>same key name as default store — proves isolation</Text>
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
@@ -422,7 +422,7 @@ const App: React.FC = () => {
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Zustand API Manager — Multi-Store</Text>
         <Text style={styles.subtitle}>
-          Two isolated stores, stable handleApi refs in useEffect, and the same "user" key proving
+          Two isolated stores, stable refs in useEffect, and the same "user" key proving
           store isolation.
         </Text>
 

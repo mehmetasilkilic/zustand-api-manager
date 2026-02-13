@@ -1,0 +1,54 @@
+# Source files
+src/
+tsconfig.json
+tsconfig.esm.json
+
+# Tests
+**/__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+vitest.config.ts
+
+# Examples
+examples/
+
+# Documentation
+docs/
+
+# Development files
+.github/
+.husky/
+.vscode/
+.idea/
+*.log
+*.lock
+.DS_Store
+
+# Config files
+.eslintrc.json
+.prettierrc
+.prettierignore
+.editorconfig
+
+# CI/CD
+.travis.yml
+.circleci/
+codecov.yml
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# NPM
+.npmrc
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build artifacts not needed
+node_modules/
+coverage/
+.nyc_output/

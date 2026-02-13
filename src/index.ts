@@ -1,23 +1,33 @@
 export * from './types'
 export { useApiStore } from './store'
-export { useLoadingStates, useApiHandler, usePolling } from './hooks'
+export { useLoadingStates, useApiQuery, usePolling, useApiMutation, usePrefetch } from './hooks'
 export { createApiComposer } from './composer'
+export { configureApiStore, resetGlobalConfig } from './config'
+export type { GlobalApiConfig } from './config'
 
 import { createApiStore as createStoreInternal } from './store'
 import {
   useLoadingStates as useLoadingStatesFn,
-  useApiHandler as useApiHandlerFn,
-  usePolling as usePollingFn
+  useApiQuery as useApiQueryFn,
+  usePolling as usePollingFn,
+  useApiMutation as useApiMutationFn,
+  usePrefetch as usePrefetchFn
 } from './hooks'
 import { createApiComposer as createApiComposerFn } from './composer'
-import type { ApiCallOptions, ApiStoreConfig, ApiHandlerResult } from './types'
+import type {
+  ApiCallOptions,
+  ApiComposerConfig,
+  ApiStoreConfig,
+  ApiHandlerResult,
+  ApiMutationResult
+} from './types'
 
 /**
  * Creates a new Zustand store instance for managing API states,
  * along with pre-bound convenience hooks scoped to that store.
  *
  * This is the recommended way to create isolated API stores (e.g. per-feature
- * or for testing). The returned hooks (`useApiHandler`, `useLoadingStates`,
+ * or for testing). The returned hooks (`useApiQuery`, `useLoadingStates`,
  * `usePolling`, `createApiComposer`) are already bound to the store instance —
  * no need to pass a `store` argument to each hook.
  *
@@ -26,12 +36,12 @@ import type { ApiCallOptions, ApiStoreConfig, ApiHandlerResult } from './types'
  *
  * @example
  * ```ts
- * const { useStore, useApiHandler, useLoadingStates, usePolling, createApiComposer } = createApiStore({
+ * const { useStore, useApiQuery, useLoadingStates, usePolling, createApiComposer } = createApiStore({
  *   storageKey: 'my-app-api',
  * })
  *
  * // Use bound hooks directly — no store argument needed
- * const { data, handleApi } = useApiHandler<User>('getUser')
+ * const { data, handleApi } = useApiQuery<User>('getUser')
  * const isLoading = useLoadingStates('getUser')
  * ```
  */
@@ -39,7 +49,7 @@ export function createApiStore(config?: ApiStoreConfig) {
   const { useStore } = createStoreInternal(config)
   return {
     useStore,
-    useApiHandler: <T>(key: string): ApiHandlerResult<T> => useApiHandlerFn<T>(key, useStore),
+    useApiQuery: <T>(key: string): ApiHandlerResult<T> => useApiQueryFn<T>(key, useStore),
     useLoadingStates: (keys?: string | string[]): boolean => useLoadingStatesFn(keys, useStore),
     usePolling: <T>(
       key: string,
@@ -47,6 +57,12 @@ export function createApiStore(config?: ApiStoreConfig) {
       interval: number,
       options?: ApiCallOptions<T> & { enabled?: boolean; immediate?: boolean }
     ): ApiHandlerResult<T> => usePollingFn<T>(key, apiCall, interval, options, useStore),
-    createApiComposer: <TApi>() => createApiComposerFn<TApi>(useStore)
+    useApiMutation: <T, V = void>(
+      key: string,
+      mutationFn: (variables: V) => Promise<{ data: T }>
+    ): ApiMutationResult<T, V> => useApiMutationFn<T, V>(key, mutationFn, useStore),
+    usePrefetch: () => usePrefetchFn(useStore),
+    createApiComposer: <TApi>(composerConfig?: ApiComposerConfig<TApi>) =>
+      createApiComposerFn<TApi>({ ...composerConfig, store: useStore })
   }
 }

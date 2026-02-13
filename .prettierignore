@@ -1,0 +1,10 @@
+node_modules
+lib
+dist
+coverage
+*.md
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.github
+CHANGELOG.md

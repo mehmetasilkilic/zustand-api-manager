@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
-import { useLoadingStates, useApiHandler, usePolling } from '../hooks'
+import { useLoadingStates, useApiQuery, usePolling } from '../hooks'
 import { createApiStore } from '../index'
 import { FetchStatus } from '../types'
 
@@ -72,11 +72,11 @@ describe('useLoadingStates', () => {
   })
 })
 
-// ── useApiHandler ────────────────────────────────────────────
+// ── useApiQuery ────────────────────────────────────────────
 
-describe('useApiHandler', () => {
+describe('useApiQuery', () => {
   it('returns isIdle=true for an unknown key', () => {
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
     expect(result.current.isIdle).toBe(true)
     expect(result.current.isLoading).toBe(false)
     expect(result.current.isError).toBe(false)
@@ -89,14 +89,14 @@ describe('useApiHandler', () => {
 
   it('returns correct boolean flags based on status', () => {
     useApiStore.getState().setApiState('users', { status: FetchStatus.LOADING })
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
     expect(result.current.isLoading).toBe(true)
     expect(result.current.isIdle).toBe(false)
     expect(result.current.status).toBe(FetchStatus.LOADING)
   })
 
   it('handleApi triggers loading then success', async () => {
-    const { result } = renderHook(() => useApiHandler<{ id: number }>('users'))
+    const { result } = renderHook(() => useApiQuery<{ id: number }>('users'))
 
     await act(async () => {
       await result.current.handleApi(() => Promise.resolve({ data: { id: 42 } }))
@@ -111,7 +111,7 @@ describe('useApiHandler', () => {
   })
 
   it('handleApi triggers loading then error', async () => {
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
       await result.current.handleApi(() => Promise.reject(new Error('oops')))
@@ -125,7 +125,7 @@ describe('useApiHandler', () => {
   })
 
   it('handleApi returns data on success', async () => {
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
 
     let returnedData: string | undefined
     await act(async () => {
@@ -136,7 +136,7 @@ describe('useApiHandler', () => {
   })
 
   it('resetApi clears state back to idle', async () => {
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
       await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
@@ -155,7 +155,7 @@ describe('useApiHandler', () => {
     const renderCount = vi.fn()
     const { result } = renderHook(() => {
       renderCount()
-      return useApiHandler<string>('users')
+      return useApiQuery<string>('users')
     })
 
     const initialRenderCount = renderCount.mock.calls.length
@@ -181,7 +181,7 @@ describe('useApiHandler', () => {
   })
 
   it('invalidateApi clears fetchedAt while preserving data', async () => {
-    const { result } = renderHook(() => useApiHandler<string>('users'))
+    const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
       await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
@@ -198,7 +198,7 @@ describe('useApiHandler', () => {
   })
 
   it('handleApi reference is stable across re-renders', async () => {
-    const { result, rerender } = renderHook(() => useApiHandler<string>('users'))
+    const { result, rerender } = renderHook(() => useApiQuery<string>('users'))
 
     const firstHandleApi = result.current.handleApi
     const firstResetApi = result.current.resetApi
@@ -225,7 +225,7 @@ describe('useApiHandler', () => {
 
   it('handleApi reference updates when key changes', () => {
     const { result, rerender } = renderHook(
-      ({ key }: { key: string }) => useApiHandler<string>(key),
+      ({ key }: { key: string }) => useApiQuery<string>(key),
       { initialProps: { key: 'users' } }
     )
 
@@ -245,9 +245,7 @@ describe('usePolling', () => {
     vi.useFakeTimers()
     const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
 
-    const { result, unmount } = renderHook(() =>
-      usePolling<string>('poll-test', apiCall, 1000)
-    )
+    const { result, unmount } = renderHook(() => usePolling<string>('poll-test', apiCall, 1000))
 
     expect(result.current.isIdle).toBe(true)
     expect(result.current.data).toBeNull()
@@ -260,9 +258,7 @@ describe('usePolling', () => {
     vi.useFakeTimers()
     const apiCall = vi.fn(() => Promise.resolve({ data: 'polled' }))
 
-    const { result, unmount } = renderHook(() =>
-      usePolling<string>('poll-interval', apiCall, 1000)
-    )
+    const { result, unmount } = renderHook(() => usePolling<string>('poll-interval', apiCall, 1000))
 
     expect(apiCall).not.toHaveBeenCalled()
 
@@ -300,9 +296,7 @@ describe('usePolling', () => {
     vi.useFakeTimers()
     const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
 
-    const { unmount } = renderHook(() =>
-      usePolling<string>('poll-unmount', apiCall, 1000)
-    )
+    const { unmount } = renderHook(() => usePolling<string>('poll-unmount', apiCall, 1000))
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000)
@@ -377,10 +371,10 @@ describe('usePolling', () => {
 // ── createApiStore — bound hooks with renderHook ─────────────
 
 describe('createApiStore — bound hooks with renderHook', () => {
-  it('bound useApiHandler works as a React hook', async () => {
+  it('bound useApiQuery works as a React hook', async () => {
     const store = createApiStore({ storageKey: 'bound-handler-test' })
 
-    const { result } = renderHook(() => store.useApiHandler<string>('test'))
+    const { result } = renderHook(() => store.useApiQuery<string>('test'))
 
     expect(result.current.isIdle).toBe(true)
 

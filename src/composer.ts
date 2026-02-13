@@ -1,9 +1,8 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { useApiStore } from './store'
 import {
   ApiCallOptions,
-  ApiComposerResult,
-  ApiEndpoint,
+  ApiComposerConfig,
   ApiState,
   ApiStore,
   FetchStatus
@@ -14,99 +13,168 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * Creates a fully type-safe API hook factory based on a predefined API structure.
  *
  * Define your API structure as an interface mapping endpoint keys to
- * {@link ApiEndpoint} types, then pass it as a generic parameter. The returned
+ * {@link ApiQueryEndpoint} or {@link ApiMutationEndpoint} types. The returned
  * hook automatically infers parameter and response types for each endpoint.
  *
- * The returned `handleApi`, `resetApi`, and `invalidateApi` functions are
- * referentially stable (wrapped in `useCallback`), so they are safe to use
- * in `useEffect` dependency arrays and memoized children.
+ * For queries, the hook returns `handleApi` for manual triggering.
+ * For mutations, the hook returns `mutate` with the mutation function pre-bound.
  *
- * @typeParam TApiStructure - An interface where each key maps to an `ApiEndpoint<Params, Response>`.
- * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
- * @returns A hook that accepts an endpoint key and returns a typed {@link ApiComposerResult}.
+ * @typeParam TApiStructure - An interface where each key maps to an endpoint type.
+ * @param config - Optional configuration including mutation functions and custom store.
+ * @returns A hook that accepts an endpoint key and returns the appropriate result type.
  *
  * @example
  * ```tsx
- * import { createApiComposer, ApiEndpoint } from 'zustand-api-manager'
+ * import { createApiComposer, ApiQueryEndpoint, ApiMutationEndpoint } from 'zustand-api-manager'
  *
  * interface MyApi {
- *   getUser: ApiEndpoint<{ id: number }, User>
- *   listPosts: ApiEndpoint<void, Post[]>
+ *   getUser: ApiQueryEndpoint<{ id: number }, User>
+ *   createUser: ApiMutationEndpoint<CreateUserPayload, User>
  * }
  *
- * const useApi = createApiComposer<MyApi>()
+ * const useApi = createApiComposer<MyApi>({
+ *   mutations: {
+ *     createUser: (payload) => api.createUser(payload)
+ *   }
+ * })
  *
+ * // Query usage
  * function UserProfile({ userId }: { userId: number }) {
- *   const { data, isLoading, handleApi, resetApi } = useApi('getUser')
+ *   const { data, isLoading, handleApi } = useApi('getUser')
  *
  *   useEffect(() => {
- *     handleApi({ id: userId }, (params) => api.getUser(params), { retry: 2 })
+ *     handleApi({ id: userId }, (params) => api.getUser(params))
  *   }, [userId, handleApi])
  *
- *   if (isLoading) return <Spinner />
  *   return <div>{data?.name}</div>
+ * }
+ *
+ * // Mutation usage
+ * function CreateUser() {
+ *   const { mutate, isLoading } = useApi('createUser')
+ *
+ *   const handleSubmit = () => {
+ *     mutate({ name: 'John', email: 'john@example.com' })
+ *   }
+ *
+ *   return <button onClick={handleSubmit}>Create</button>
  * }
  * ```
  */
-export function createApiComposer<TApiStructure>(store?: UseBoundStore<StoreApi<ApiStore>>) {
-  return function useApiComposer<K extends keyof TApiStructure>(
-    key: K
-  ): TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiComposerResult<R, P> : never {
-    type Entry = TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiEndpoint<P, R> : never
-    type Params = Entry['params']
-    type Response = Entry['response']
+export function createApiComposer<TApiStructure>(
+  config?: ApiComposerConfig<TApiStructure> & { store?: UseBoundStore<StoreApi<ApiStore>> }
+) {
+  // Return type is discriminated at call site based on whether the endpoint
+  // is a query or mutation. We use `any` here since the actual type is
+  // resolved correctly through TypeScript inference at the usage site.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return function useApiComposer<K extends keyof TApiStructure>(key: K): any {
+    const useStore = config?.store ?? useApiStore
 
-    const useStore = store ?? useApiStore
-
-    // Only subscribe reactively to the slice that actually changes.
-    // Store methods are stable references, so we read them via getState()
-    // inside useCallback to avoid unnecessary subscriptions.
+    // Subscribe reactively to the state slice
     const apiState = useStore(state => state.apiStates[key as string]) as
-      | ApiState<Response>
+      | ApiState<unknown>
       | undefined
 
-    const composerHandleApi = useCallback((...args: unknown[]) => {
-      let params: Params
-      let apiCall: (params: Params) => Promise<{ data: Response }>
-      let options: ApiCallOptions<Response> | undefined
+    // Check if this is a mutation with a pre-bound function
+    const mutationFn = config?.mutations?.[key] as
+      | ((variables: unknown) => Promise<{ data: unknown }>)
+      | undefined
 
-      // For void params: handleApi(apiCall, options?)
-      // For non-void params: handleApi(params, apiCall, options?)
-      if (typeof args[0] === 'function') {
-        apiCall = args[0] as (params: Params) => Promise<{ data: Response }>
-        options = args[1] as ApiCallOptions<Response> | undefined
-        params = undefined as Params
-      } else {
-        params = args[0] as Params
-        apiCall = args[1] as (params: Params) => Promise<{ data: Response }>
-        options = args[2] as ApiCallOptions<Response> | undefined
-      }
+    const mutationFnRef = useRef(mutationFn)
+    mutationFnRef.current = mutationFn
 
-      return useStore.getState().handleApi(key as string, () => apiCall(params), options)
-    }, [key, useStore])
-
-    const resetApi = useCallback(
-      () => useStore.getState().resetApiState(key as string),
-      [key, useStore]
-    )
-
-    const invalidateApi = useCallback(
-      () => useStore.getState().invalidateApi(key as string),
-      [key, useStore]
-    )
-
-    return {
+    // Common state accessors
+    const commonState = {
       data: apiState?.data ?? null,
       status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
       isIdle: !apiState || apiState.status === FetchStatus.IDLE,
       isLoading: apiState?.status === FetchStatus.LOADING,
       isSuccess: apiState?.status === FetchStatus.SUCCESS,
       isError: apiState?.status === FetchStatus.ERROR,
-      error: apiState?.error ?? null,
+      error: apiState?.error ?? null
+    }
+
+    // If this is a mutation endpoint
+    if (mutationFn) {
+      const mutate = useCallback(
+        (...args: unknown[]) => {
+          let variables: unknown
+          let options: ApiCallOptions<unknown> | undefined
+
+          // For void variables: mutate(options?)
+          // For non-void variables: mutate(variables, options?)
+          if (
+            args.length === 0 ||
+            (args.length === 1 && typeof args[0] === 'object' && 'onSuccess' in (args[0] as object))
+          ) {
+            variables = undefined
+            options = args[0] as ApiCallOptions<unknown> | undefined
+          } else {
+            variables = args[0]
+            options = args[1] as ApiCallOptions<unknown> | undefined
+          }
+
+          return useStore
+            .getState()
+            .handleApi(key as string, () => mutationFnRef.current!(variables), options)
+        },
+        [key, useStore]
+      )
+
+      const reset = useCallback(
+        () => useStore.getState().resetApiState(key as string),
+        [key, useStore]
+      )
+
+      return {
+        ...commonState,
+        mutate,
+        reset
+      }
+    }
+
+    // This is a query endpoint
+    const query = useCallback(
+      (...args: unknown[]) => {
+        let params: unknown
+        let apiCall: (params: unknown) => Promise<{ data: unknown }>
+        let options: ApiCallOptions<unknown> | undefined
+
+        // For void params: query(apiCall, options?)
+        // For non-void params: query(params, apiCall, options?)
+        if (typeof args[0] === 'function') {
+          apiCall = args[0] as (params: unknown) => Promise<{ data: unknown }>
+          options = args[1] as ApiCallOptions<unknown> | undefined
+          params = undefined
+        } else {
+          params = args[0]
+          apiCall = args[1] as (params: unknown) => Promise<{ data: unknown }>
+          options = args[2] as ApiCallOptions<unknown> | undefined
+        }
+
+        return useStore.getState().handleApi(key as string, () => apiCall(params), options)
+      },
+      [key, useStore]
+    )
+
+    const reset = useCallback(
+      () => useStore.getState().resetApiState(key as string),
+      [key, useStore]
+    )
+
+    const invalidate = useCallback(
+      () => useStore.getState().invalidateApi(key as string),
+      [key, useStore]
+    )
+
+    return {
+      ...commonState,
       fetchedAt: apiState?.fetchedAt ?? null,
-      handleApi: composerHandleApi,
-      resetApi,
-      invalidateApi
-    } as TApiStructure[K] extends ApiEndpoint<infer P, infer R> ? ApiComposerResult<R, P> : never
+      query,
+      reset,
+      invalidate
+    }
   }
 }
+
