@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import {
-  ApiEndpoint,
+  ApiQueryEndpoint,
   createApiComposer,
   createApiStore,
   FetchStatus,
-  useApiHandler,
+  useApiQuery,
   useApiStore,
   useLoadingStates
 } from 'zustand-api-manager'
@@ -67,7 +67,7 @@ const updateUser = (user: User) =>
 // Second store for a separate feature domain ----------------------------------
 
 interface SecondApiStructure {
-  getComments: ApiEndpoint<void, Comment[]>
+  getComments: ApiQueryEndpoint<void, Comment[]>
 }
 
 const secondStore = createApiStore({ storageKey: 'second-store' })
@@ -76,8 +76,8 @@ const useSecondApi = secondStore.createApiComposer<SecondApiStructure>()
 // Typed API structure for the default store's composer ------------------------
 
 interface DefaultApiStructure {
-  getUser: ApiEndpoint<{ id: number }, User>
-  getPosts: ApiEndpoint<void, Post[]>
+  getUser: ApiQueryEndpoint<{ id: number }, User>
+  getPosts: ApiQueryEndpoint<void, Post[]>
 }
 
 const useApi = createApiComposer<DefaultApiStructure>()
@@ -127,11 +127,11 @@ const GlobalLoadingIndicator: React.FC = () => {
 }
 
 const BasicHandlerExample: React.FC = () => {
-  const { data, status, isIdle, isLoading, fetchedAt, handleApi, resetApi } =
-    useApiHandler<User>('user')
+  const { data, status, isIdle, isLoading, fetchedAt, query, reset } =
+    useApiQuery<User>('user')
 
   const loadUser = async () => {
-    const user = await handleApi(() => fetchUser(13), {
+    const user = await query(() => fetchUser(13), {
       persist: true,
       staleTime: 5000,
       onSuccess: d => console.log('User loaded:', d.username),
@@ -141,12 +141,12 @@ const BasicHandlerExample: React.FC = () => {
   }
 
   return (
-    <Card title="useApiHandler — default store" hint="staleTime · persist · fetchedAt · resetApi">
+    <Card title="useApiQuery — default store" hint="staleTime · persist · fetchedAt · reset">
       <ButtonRow>
         <button onClick={loadUser} disabled={isLoading}>
           {isLoading ? 'Loading…' : 'Load user'}
         </button>
-        <button onClick={resetApi} disabled={isIdle}>
+        <button onClick={reset} disabled={isIdle}>
           Reset
         </button>
       </ButtonRow>
@@ -158,25 +158,25 @@ const BasicHandlerExample: React.FC = () => {
 
 const UseEffectExample: React.FC = () => {
   const [userId, setUserId] = useState(1)
-  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    useApiHandler<User>('effect-user')
+  const { data, isLoading, status, fetchedAt, query, reset } =
+    useApiQuery<User>('effect-user')
 
-  // handleApi is a stable reference — safe to include in useEffect deps.
+  // query is a stable reference — safe to include in useEffect deps.
   // This effect only re-runs when userId changes, not on every render.
   useEffect(() => {
-    handleApi(() => fetchUser(userId), { staleTime: 5000 })
-  }, [userId, handleApi])
+    query(() => fetchUser(userId), { staleTime: 5000 })
+  }, [userId, query])
 
   return (
     <Card
-      title="useEffect with handleApi — stable refs"
-      hint="handleApi in useEffect deps · staleTime · no infinite loops"
+      title="useEffect with query — stable refs"
+      hint="query in useEffect deps · staleTime · no infinite loops"
     >
       <ButtonRow>
         <button onClick={() => setUserId(id => id + 1)}>
           Next user (current: {userId})
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -188,11 +188,11 @@ const UseEffectExample: React.FC = () => {
 }
 
 const OptimisticUpdateExample: React.FC = () => {
-  const { data, isLoading, status, handleApi, resetApi } = useApiHandler<User>('optimistic-user')
+  const { data, isLoading, status, query, reset } = useApiQuery<User>('optimistic-user')
 
   const saveUser = () => {
     const optimistic: User = { id: 42, username: 'optimistic-jane' }
-    void handleApi(() => updateUser(optimistic), {
+    void query(() => updateUser(optimistic), {
       optimisticData: optimistic,
       onSuccess: d => console.log('Saved user:', d.username)
     })
@@ -204,7 +204,7 @@ const OptimisticUpdateExample: React.FC = () => {
         <button onClick={saveUser} disabled={isLoading}>
           {isLoading ? 'Saving…' : 'Save user'}
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -215,20 +215,20 @@ const OptimisticUpdateExample: React.FC = () => {
 }
 
 const ComposerExample: React.FC = () => {
-  const { data: posts, isLoading, isError, status, fetchedAt, handleApi, resetApi } =
+  const { data: posts, isLoading, isError, status, fetchedAt, query, reset } =
     useApi('getPosts')
 
   const loadPosts = () => {
-    void handleApi(() => fetchPosts(), { staleTime: 10000 })
+    void query(() => fetchPosts(), { staleTime: 10000 })
   }
 
   return (
-    <Card title="createApiComposer — default store" hint="staleTime · typed composer · resetApi">
+    <Card title="createApiComposer — default store" hint="staleTime · typed composer · reset">
       <ButtonRow>
         <button onClick={loadPosts} disabled={isLoading}>
           {isLoading ? 'Loading…' : 'Load posts'}
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -245,23 +245,23 @@ const ComposerExample: React.FC = () => {
 
 const ComposerEffectExample: React.FC = () => {
   const [postId, setPostId] = useState(1)
-  const { data, isLoading, status, fetchedAt, handleApi, resetApi } = useApi('getUser')
+  const { data, isLoading, status, fetchedAt, query, reset } = useApi('getUser')
 
-  // Composer's handleApi is also a stable ref — safe in deps
+  // Composer's query is also a stable ref — safe in deps
   useEffect(() => {
-    handleApi({ id: postId }, params => fetchUser(params.id))
-  }, [postId, handleApi])
+    query({ id: postId }, params => fetchUser(params.id))
+  }, [postId, query])
 
   return (
     <Card
       title="Composer + useEffect — stable refs"
-      hint="typed params · handleApi in useEffect deps · no infinite loops"
+      hint="typed params · query in useEffect deps · no infinite loops"
     >
       <ButtonRow>
         <button onClick={() => setPostId(id => id + 1)}>
           Next user (current: {postId})
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -274,27 +274,27 @@ const ComposerEffectExample: React.FC = () => {
 
 /** Uses the second store — completely isolated from the default store. */
 const SecondStoreExample: React.FC = () => {
-  const { data: comments, isLoading, status, fetchedAt, handleApi, resetApi, invalidateApi } =
+  const { data: comments, isLoading, status, fetchedAt, query, reset, invalidate } =
     useSecondApi('getComments')
 
   const loadComments = () => {
-    void handleApi(() => fetchComments(), { staleTime: 8000 })
+    void query(() => fetchComments(), { staleTime: 8000 })
   }
 
   return (
     <Card
       title="createApiComposer — second store"
-      hint="isolated store · staleTime · invalidateApi"
+      hint="isolated store · staleTime · invalidate"
       accent="#52c41a"
     >
       <ButtonRow>
         <button onClick={loadComments} disabled={isLoading}>
           {isLoading ? 'Loading…' : 'Load comments'}
         </button>
-        <button onClick={() => invalidateApi()} disabled={status === FetchStatus.IDLE}>
+        <button onClick={() => invalidate()} disabled={status === FetchStatus.IDLE}>
           Invalidate
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -308,19 +308,19 @@ const SecondStoreExample: React.FC = () => {
   )
 }
 
-/** Uses the second store with useApiHandler (bound version). */
+/** Uses the second store with useApiQuery (bound version). */
 const SecondStoreHandlerExample: React.FC = () => {
-  const { data, isLoading, status, fetchedAt, handleApi, resetApi } =
-    secondStore.useApiHandler<User>('user')
+  const { data, isLoading, status, fetchedAt, query, reset } =
+    secondStore.useApiQuery<User>('user')
 
   const loadUser = async () => {
-    const user = await handleApi(() => fetchUser(99), { staleTime: 5000 })
+    const user = await query(() => fetchUser(99), { staleTime: 5000 })
     if (user) console.log('[Second store] user:', user.username)
   }
 
   return (
     <Card
-      title="useApiHandler — second store (same 'user' key)"
+      title="useApiQuery — second store (same 'user' key)"
       hint="same key name as default store — proves isolation"
       accent="#52c41a"
     >
@@ -328,7 +328,7 @@ const SecondStoreHandlerExample: React.FC = () => {
         <button onClick={loadUser} disabled={isLoading}>
           {isLoading ? 'Loading…' : 'Load user (id=99)'}
         </button>
-        <button onClick={resetApi} disabled={status === FetchStatus.IDLE}>
+        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
           Reset
         </button>
       </ButtonRow>
@@ -382,7 +382,7 @@ export const App: React.FC = () => {
         <div>
           <h1 style={{ margin: 0 }}>Zustand API Manager — Multi-Store Example</h1>
           <p style={{ marginTop: 8 }}>
-            Two isolated stores, stable <code>handleApi</code> refs in <code>useEffect</code>,{' '}
+            Two isolated stores, stable <code>query</code> refs in <code>useEffect</code>,{' '}
             <code>useLoadingStates</code>, and <code>createApiComposer</code>. Both stores use the{' '}
             <code>&quot;user&quot;</code> key to prove store isolation.
           </p>

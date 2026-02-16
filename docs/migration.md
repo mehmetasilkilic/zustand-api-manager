@@ -17,11 +17,11 @@ const { data, isLoading, error, refetch } = useQuery({
 
 **Zustand API Manager:**
 ```typescript
-const { data, isLoading, error, handleApi } = useApiQuery<User>(`user-${userId}`)
+const { data, isLoading, error, query } = useApiQuery<User>(`user-${userId}`)
 
 useEffect(() => {
-  handleApi(() => fetchUser(userId), { staleTime: 60_000 })
-}, [userId, handleApi])
+  query(() => fetchUser(userId), { staleTime: 60_000 })
+}, [userId, query])
 ```
 
 ### Mutation Hook
@@ -57,9 +57,9 @@ queryClient.invalidateQueries({ queryKey: ['users'] })
 
 **Zustand API Manager:**
 ```typescript
-useApiStore.getState().invalidateApi('users')
+useApiStore.getState().invalidate()('users')
 // or batch:
-useApiStore.getState().invalidateApis(['users', 'posts'])
+useApiStore.getState().invalidate()s(['users', 'posts'])
 ```
 
 ---
@@ -79,14 +79,14 @@ const { data, error, isLoading, mutate } = useSWR(
 
 **Zustand API Manager:**
 ```typescript
-const { data, error, isLoading, handleApi, invalidateApi } = useApiQuery<User>('user')
+const { data, error, isLoading, query, invalidate() } = useApiQuery<User>('user')
 
 useEffect(() => {
-  handleApi(() => api.getUser(), {
+  query(() => api.getUser(), {
     revalidateOnStale: true,
     staleTime: 30_000
   })
-}, [handleApi])
+}, [query])
 ```
 
 ### Mutation
@@ -129,14 +129,14 @@ const api = createApi({
 **Zustand API Manager:**
 ```typescript
 interface MyApi {
-  getUser: ApiEndpoint<{ id: number }, User>
+  getUser: ApiQueryEndpoint<{ id: number }, User>
 }
 
 const useApi = createApiComposer<MyApi>()
 
 // In component:
-const { data, handleApi } = useApi('getUser')
-handleApi({ id: 1 }, (params) => fetchUser(params.id))
+const { data, query } = useApi('getUser')
+query({ id: 1 }, (params) => fetchUser(params.id))
 ```
 
 ---

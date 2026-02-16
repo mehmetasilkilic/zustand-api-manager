@@ -95,11 +95,11 @@ describe('useApiQuery', () => {
     expect(result.current.status).toBe(FetchStatus.LOADING)
   })
 
-  it('handleApi triggers loading then success', async () => {
+  it('query triggers loading then success', async () => {
     const { result } = renderHook(() => useApiQuery<{ id: number }>('users'))
 
     await act(async () => {
-      await result.current.handleApi(() => Promise.resolve({ data: { id: 42 } }))
+      await result.current.query(() => Promise.resolve({ data: { id: 42 } }))
     })
 
     expect(result.current.isSuccess).toBe(true)
@@ -110,11 +110,11 @@ describe('useApiQuery', () => {
     expect(result.current.fetchedAt).not.toBeNull()
   })
 
-  it('handleApi triggers loading then error', async () => {
+  it('query triggers loading then error', async () => {
     const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
-      await result.current.handleApi(() => Promise.reject(new Error('oops')))
+      await result.current.query(() => Promise.reject(new Error('oops')))
     })
 
     expect(result.current.isError).toBe(true)
@@ -124,27 +124,27 @@ describe('useApiQuery', () => {
     expect(result.current.status).toBe(FetchStatus.ERROR)
   })
 
-  it('handleApi returns data on success', async () => {
+  it('query returns data on success', async () => {
     const { result } = renderHook(() => useApiQuery<string>('users'))
 
     let returnedData: string | undefined
     await act(async () => {
-      returnedData = await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+      returnedData = await result.current.query(() => Promise.resolve({ data: 'hello' }))
     })
 
     expect(returnedData).toBe('hello')
   })
 
-  it('resetApi clears state back to idle', async () => {
+  it('reset clears state back to idle', async () => {
     const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
-      await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+      await result.current.query(() => Promise.resolve({ data: 'hello' }))
     })
     expect(result.current.isSuccess).toBe(true)
 
     act(() => {
-      result.current.resetApi()
+      result.current.reset()
     })
     expect(result.current.isIdle).toBe(true)
     expect(result.current.data).toBeNull()
@@ -180,29 +180,29 @@ describe('useApiQuery', () => {
     })
   })
 
-  it('invalidateApi clears fetchedAt while preserving data', async () => {
+  it('invalidate clears fetchedAt while preserving data', async () => {
     const { result } = renderHook(() => useApiQuery<string>('users'))
 
     await act(async () => {
-      await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+      await result.current.query(() => Promise.resolve({ data: 'hello' }))
     })
     expect(result.current.fetchedAt).not.toBeNull()
     expect(result.current.data).toBe('hello')
 
     act(() => {
-      result.current.invalidateApi()
+      result.current.invalidate()
     })
     expect(result.current.fetchedAt).toBeNull()
     expect(result.current.data).toBe('hello')
     expect(result.current.isSuccess).toBe(true)
   })
 
-  it('handleApi reference is stable across re-renders', async () => {
+  it('query reference is stable across re-renders', async () => {
     const { result, rerender } = renderHook(() => useApiQuery<string>('users'))
 
-    const firstHandleApi = result.current.handleApi
-    const firstResetApi = result.current.resetApi
-    const firstInvalidateApi = result.current.invalidateApi
+    const firstQuery = result.current.query
+    const firstReset = result.current.reset
+    const firstInvalidate = result.current.invalidate
 
     // Trigger a re-render by changing unrelated state
     act(() => {
@@ -212,29 +212,29 @@ describe('useApiQuery', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(true))
 
     // Function references should be the same
-    expect(result.current.handleApi).toBe(firstHandleApi)
-    expect(result.current.resetApi).toBe(firstResetApi)
-    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+    expect(result.current.query).toBe(firstQuery)
+    expect(result.current.reset).toBe(firstReset)
+    expect(result.current.invalidate).toBe(firstInvalidate)
 
     // Also stable after a plain rerender
     rerender()
-    expect(result.current.handleApi).toBe(firstHandleApi)
-    expect(result.current.resetApi).toBe(firstResetApi)
-    expect(result.current.invalidateApi).toBe(firstInvalidateApi)
+    expect(result.current.query).toBe(firstQuery)
+    expect(result.current.reset).toBe(firstReset)
+    expect(result.current.invalidate).toBe(firstInvalidate)
   })
 
-  it('handleApi reference updates when key changes', () => {
+  it('query reference updates when key changes', () => {
     const { result, rerender } = renderHook(
       ({ key }: { key: string }) => useApiQuery<string>(key),
       { initialProps: { key: 'users' } }
     )
 
-    const firstHandleApi = result.current.handleApi
+    const firstQuery = result.current.query
 
     rerender({ key: 'posts' })
 
     // Function references should change because key changed
-    expect(result.current.handleApi).not.toBe(firstHandleApi)
+    expect(result.current.query).not.toBe(firstQuery)
   })
 })
 
@@ -379,7 +379,7 @@ describe('createApiStore — bound hooks with renderHook', () => {
     expect(result.current.isIdle).toBe(true)
 
     await act(async () => {
-      await result.current.handleApi(() => Promise.resolve({ data: 'hello' }))
+      await result.current.query(() => Promise.resolve({ data: 'hello' }))
     })
 
     expect(result.current.isSuccess).toBe(true)

@@ -59,7 +59,7 @@ export interface ApiError extends Error {
 }
 
 /**
- * Configuration options passed to `handleApi` to customize the behavior of an API call.
+ * Configuration options passed to `query()` or `store.handleApi()` to customize the behavior of an API call.
  *
  * @typeParam T - The expected response data type (used for typed `onSuccess` and `optimisticData`).
  *
@@ -67,7 +67,7 @@ export interface ApiError extends Error {
  * ```ts
  * const controller = new AbortController()
  *
- * handleApi('users', fetchUsers, {
+ * query(() => fetchUsers(), {
  *   persist: true,
  *   retry: 3,
  *   staleTime: 30_000,
@@ -106,7 +106,7 @@ export interface ApiCallOptions<T = unknown> {
    *
    * @example
    * ```ts
-   * handleApi(() => fetchUser(), {
+   * query(() => fetchUser(), {
    *   staleTime: 30_000,
    *   revalidateOnStale: true // Return stale data instantly, refetch in background
    * })
@@ -136,7 +136,7 @@ export interface ApiCallOptions<T = unknown> {
    *
    * @example
    * ```ts
-   * handleApi('users', fetchUsers, {
+   * query(() => fetchUsers(), {
    *   retry: 3,
    *   shouldRetry: (error) => error.status !== 401
    * })
@@ -150,7 +150,7 @@ export interface ApiCallOptions<T = unknown> {
    *
    * @example
    * ```ts
-   * handleApi('users', fetchUsers, {
+   * query(() => fetchUsers(), {
    *   retry: 3,
    *   backoff: (attempt) => 500 * (attempt + 1)
    * })
@@ -171,7 +171,7 @@ export interface ApiCallOptions<T = unknown> {
    * @example
    * ```ts
    * try {
-   *   const data = await handleApi('users', fetchUsers, { throwOnError: true })
+   *   const data = await query(() => fetchUsers(), { throwOnError: true })
    *   // data is guaranteed non-undefined here
    * } catch (error) {
    *   console.error('Request failed:', error)
@@ -264,7 +264,7 @@ export interface ApiStore {
   apiStates: Record<string, ApiState<unknown>>
   /** A map tracking which API keys should be persisted to `localStorage`. */
   persistentKeys: Record<string, boolean>
-  /** The registered middleware functions applied to every `handleApi` call. */
+  /** The registered middleware functions applied to every API call. */
   middleware: ApiMiddleware[]
   /** The registered global error handler callbacks. */
   errorHandlers: ((error: ApiError, key: string) => void)[]
@@ -288,7 +288,7 @@ export interface ApiStore {
 
   /**
    * Mark a cached API key as stale by clearing its `fetchedAt` timestamp.
-   * The existing data remains visible, but the next `handleApi` call with
+   * The existing data remains visible, but the next API call with
    * `staleTime` will refetch instead of returning the cache.
    *
    * @param key - The unique identifier for the API endpoint to invalidate.
@@ -338,7 +338,7 @@ export interface ApiStore {
   /**
    * Invalidate all cached API keys in a single state update.
    * Clears `fetchedAt` for every key while preserving existing data and status.
-   * The next `handleApi` call with `staleTime` will refetch.
+   * The next API call with `staleTime` will refetch.
    *
    * @example
    * ```ts
@@ -368,7 +368,7 @@ export interface ApiStore {
   ) => Promise<T | undefined>
 
   /**
-   * Register a middleware function that will be applied to all subsequent `handleApi` calls.
+   * Register a middleware function that will be applied to all subsequent API calls.
    * Middleware is composed in registration order (first registered = outermost wrapper).
    *
    * @param middleware - The middleware function to add.
@@ -429,12 +429,12 @@ export interface ApiStoreConfig {
 }
 
 /**
- * The return type of {@link useApiHandler}.
+ * The return type of {@link useApiQuery}.
  * Provides reactive access to the API state along with functions to trigger and reset.
  *
  * @typeParam T - The response data type.
  */
-export interface ApiHandlerResult<T> {
+export interface ApiQueryResult<T> {
   /** The response data, or `null` if not yet loaded or on error. */
   data: T | null
   /** The raw lifecycle status of the API request. */
@@ -458,15 +458,20 @@ export interface ApiHandlerResult<T> {
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
    * @returns The response data on success, or `undefined` otherwise.
    */
-  handleApi: (
+  query: (
     apiCall: () => Promise<{ data: T }>,
     options?: ApiCallOptions<T>
   ) => Promise<T | undefined>
   /** Reset this endpoint's state back to idle and remove it from persistence. */
-  resetApi: () => void
+  reset: () => void
   /** Mark this endpoint's cache as stale so the next call with `staleTime` will refetch. */
-  invalidateApi: () => void
+  invalidate: () => void
 }
+
+/**
+ * @deprecated Use {@link ApiQueryResult} instead. Will be removed in a future version.
+ */
+export type ApiHandlerResult<T> = ApiQueryResult<T>
 
 /**
  * The return type of {@link useApiMutation}.

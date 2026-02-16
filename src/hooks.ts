@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
-import { ApiCallOptions, ApiHandlerResult, ApiMutationResult, ApiStore, FetchStatus } from './types'
+import { ApiCallOptions, ApiQueryResult, ApiMutationResult, ApiStore, FetchStatus } from './types'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
@@ -42,26 +42,26 @@ export const useLoadingStates = (
  * Provides reactive access to query state along with functions to trigger,
  * reset, and invalidate the query.
  *
- * The returned `handleApi`, `resetApi`, and `invalidateApi` functions are
+ * The returned `query`, `reset`, and `invalidate` functions are
  * referentially stable (wrapped in `useCallback`), so they are safe to use
  * in `useEffect` dependency arrays and memoized children.
  *
  * @typeParam T - The expected response data type.
  * @param key - The unique identifier for the API endpoint.
  * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
- * @returns An {@link ApiHandlerResult} containing the current state (`data`, `error`, status booleans),
- *          a `handleApi` function to trigger the call, and a `resetApi` function to clear the state.
+ * @returns An {@link ApiQueryResult} containing the current state (`data`, `error`, status booleans),
+ *          a `query` function to trigger the call, and a `reset` function to clear the state.
  *
  * @example
  * ```tsx
  * interface User { id: number; name: string }
  *
  * function UserProfile() {
- *   const { data, isLoading, isError, error, handleApi, resetApi } = useApiQuery<User>('getUser')
+ *   const { data, isLoading, isError, error, query, reset } = useApiQuery<User>('getUser')
  *
  *   useEffect(() => {
- *     handleApi(() => fetch('/api/user').then(r => r.json()))
- *   }, [handleApi])
+ *     query(() => fetch('/api/user').then(r => r.json()))
+ *   }, [query])
  *
  *   if (isLoading) return <Spinner />
  *   if (isError) return <Error message={error?.message} />
@@ -72,24 +72,23 @@ export const useLoadingStates = (
 export const useApiQuery = <T>(
   key: string,
   store?: UseBoundStore<StoreApi<ApiStore>>
-): ApiHandlerResult<T> => {
+): ApiQueryResult<T> => {
   const useStore = store ?? useApiStore
 
   // Only subscribe reactively to the slice that actually changes.
-  // Store methods (handleApi, resetApiState, invalidateApi) are stable
-  // references defined once in create(), so we read them via getState()
-  // to avoid unnecessary subscriptions.
+  // Store methods are stable references defined once in create(),
+  // so we read them via getState() to avoid unnecessary subscriptions.
   const apiState = useStore(state => state.apiStates[key])
 
-  const handleApi = useCallback(
+  const query = useCallback(
     (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
       useStore.getState().handleApi<T>(key, apiCall, options),
     [key, useStore]
   )
 
-  const resetApi = useCallback(() => useStore.getState().resetApiState(key), [key, useStore])
+  const reset = useCallback(() => useStore.getState().resetApiState(key), [key, useStore])
 
-  const invalidateApi = useCallback(() => useStore.getState().invalidateApi(key), [key, useStore])
+  const invalidate = useCallback(() => useStore.getState().invalidateApi(key), [key, useStore])
 
   return {
     status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
@@ -100,9 +99,9 @@ export const useApiQuery = <T>(
     data: (apiState?.data as T | undefined) ?? null,
     error: apiState?.error ?? null,
     fetchedAt: apiState?.fetchedAt ?? null,
-    handleApi,
-    resetApi,
-    invalidateApi
+    query,
+    reset,
+    invalidate
   }
 }
 
@@ -125,7 +124,7 @@ export const useApiQuery = <T>(
  *   - `enabled` — If `false`, polling is paused. Defaults to `true`.
  *   - `immediate` — If `true`, fires the first request immediately instead of waiting for the first interval.
  * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
- * @returns An {@link ApiHandlerResult} containing the current state and control functions.
+ * @returns An {@link ApiQueryResult} containing the current state and control functions.
  *
  * @example
  * ```tsx
@@ -147,7 +146,7 @@ export const usePolling = <T>(
   interval: number,
   options?: ApiCallOptions<T> & { enabled?: boolean; immediate?: boolean },
   store?: UseBoundStore<StoreApi<ApiStore>>
-): ApiHandlerResult<T> => {
+): ApiQueryResult<T> => {
   const useStore = store ?? useApiStore
   const handler = useApiQuery<T>(key, useStore)
 
@@ -185,8 +184,8 @@ export const usePolling = <T>(
 
 /**
  * A hook for managing API mutations (POST, PUT, DELETE, PATCH operations).
- * Unlike `useApiHandler` which is designed for queries (GET), this hook is
- * optimized for mutations with better semantics (mutate instead of handleApi).
+ * Unlike `useApiQuery` which is designed for queries (GET), this hook is
+ * optimized for mutations with better semantics (mutate instead of query).
  *
  * Mutations don't use caching by default and provide a simpler API focused
  * on write operations with variables/payload.

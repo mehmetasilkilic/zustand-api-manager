@@ -22,14 +22,14 @@ A powerful, lightweight, and flexible API state management solution built on top
 import { useApiQuery } from 'zustand-api-manager'
 
 function UserProfile({ userId }) {
-  const { data, isLoading, handleApi } = useApiQuery<User>('user')
+  const { data, isLoading, query } = useApiQuery<User>('user')
 
   useEffect(() => {
-    handleApi(() => fetchUser(userId), {
+    query(() => fetchUser(userId), {
       staleTime: 60_000, // Cache for 1 minute
       retry: 2 // Retry twice on failure
     })
-  }, [userId, handleApi])
+  }, [userId, query])
 
   if (isLoading) return <Loading />
   return <div>{data?.name}</div>
@@ -122,8 +122,8 @@ npm install zustand-api-manager zustand immer
 - Easy-to-use API state management
 - Built on top of Zustand for efficient state updates
 - Support for idle, loading, success, and error states
-- `handleApi` returns the response data directly on success
-- **Stable function references** — `handleApi`, `resetApi`, and `invalidateApi` are wrapped in `useCallback` and safe to use in `useEffect` dependency arrays
+- `query` returns the response data directly on success
+- **Stable function references** — `query`, `reset`, and `invalidate` are wrapped in `useCallback` and safe to use in `useEffect` dependency arrays
 - **Optimized subscriptions** — hooks subscribe only to the data slice that changes; store methods are read without creating extra subscriptions
 - Persistent state options with custom storage support (sync and async)
 - Middleware support for customizing API call behavior
@@ -132,8 +132,8 @@ npm install zustand-api-manager zustand immer
 - Automatic retry with exponential back-off, customizable `shouldRetry` and `backoff` strategies
 - Race condition protection (stale responses are automatically discarded)
 - Built-in caching via `staleTime` — skip refetches when data is fresh
-- Cache invalidation via `invalidateApi` / `invalidateApis` — mark data as stale without removing it
-- Batch operations via `invalidateApis`, `resetApiStates`, `resetAll`, and `invalidateAll`
+- Cache invalidation via `invalidate()` / `invalidate()s` — mark data as stale without removing it
+- Batch operations via `invalidate()s`, `reset()States`, `resetAll`, and `invalidateAll`
 - Optimistic updates with automatic rollback on error
 - Request timeout with `TIMEOUT` error code
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
@@ -172,13 +172,13 @@ interface UserData {
 }
 
 function MyComponent() {
-  const { data, isIdle, isLoading, isError, status, handleApi } =
+  const { data, isIdle, isLoading, isError, status, query } =
     useApiQuery<UserData>("user");
 
   const params = { id: 13 };
 
   useEffect(() => {
-    handleApi(
+    query(
       () => fetchUserData(params), // API call (close over your params)
       {
         onSuccess: (data) => {
@@ -191,7 +191,7 @@ function MyComponent() {
         persist: true,
       }
     );
-  }, [handleApi]); // handleApi is stable — safe to include in deps
+  }, [query]); // query is stable — safe to include in deps
 
   if (isIdle) return <div>Ready to fetch</div>;
   if (isLoading) return <div>Loading...</div>;
@@ -201,12 +201,12 @@ function MyComponent() {
 }
 ```
 
-> **Note:** `handleApi`, `resetApi`, and `invalidateApi` are referentially stable (wrapped in `useCallback`), so they won't cause infinite loops when listed in `useEffect` dependency arrays.
+> **Note:** `query`, `reset`, and `invalidate` are referentially stable (wrapped in `useCallback`), so they won't cause infinite loops when listed in `useEffect` dependency arrays.
 
-`handleApi` returns a `Promise<T | undefined>`, so you can also use its return value directly:
+`query` returns a `Promise<T | undefined>`, so you can also use its return value directly:
 
 ```typescript
-const user = await handleApi(() => fetchUserData(params));
+const user = await query(() => fetchUserData(params));
 if (user) {
   console.log("Got user:", user.username);
 }
@@ -261,27 +261,27 @@ export const useApi = createApiComposer<MyApiStructure>();
 
 ```typescript
 function PostDetail({ postId }: { postId: number }) {
-  const { data, isLoading, handleApi, resetApi } = useApi("getPost");
+  const { data, isLoading, query, reset } = useApi("getPost");
 
   useEffect(() => {
     // Params are passed through to the apiCall function
-    handleApi({ id: postId }, (params) => fetchPost(params));
-  }, [postId, handleApi]); // handleApi is stable — won't cause extra fetches
+    query({ id: postId }, (params) => fetchPost(params));
+  }, [postId, query]); // query is stable — won't cause extra fetches
 
   if (isLoading) return <Spinner />;
   return <div>{data?.title}</div>;
 }
 ```
 
-For endpoints with `void` params, call `handleApi` with just the API function:
+For endpoints with `void` params, call `query` with just the API function:
 
 ```typescript
 function UserList() {
-  const { data, isLoading, handleApi } = useApi("getUsers");
+  const { data, isLoading, query } = useApi("getUsers");
 
   useEffect(() => {
-    handleApi(() => fetchUsers());
-  }, [handleApi]); // stable reference — safe in deps
+    query(() => fetchUsers());
+  }, [query]); // stable reference — safe in deps
 
   if (isLoading) return <Spinner />;
   return <ul>{data?.map((u) => <li key={u.id}>{u.name}</li>)}</ul>;
@@ -295,13 +295,13 @@ function UserList() {
 The default singleton store for managing API states. Provides the following methods:
 
 - `setApiState(key, state, persist?)` — Update the state for a specific API key. `persist` is three-state: `true` marks for persistence, `false` removes persistence, `undefined` (omitted) leaves persistence unchanged
-- `resetApiState(key)` — Reset the state for a specific API key
-- `invalidateApi(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
-- `invalidateApis(keys)` — Batch-invalidate multiple keys in a single state update
-- `resetApiStates(keys)` — Batch-reset multiple keys in a single state update
+- `reset()State(key)` — Reset the state for a specific API key
+- `invalidate()(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
+- `invalidate()s(keys)` — Batch-invalidate multiple keys in a single state update
+- `reset()States(keys)` — Batch-reset multiple keys in a single state update
 - `resetAll()` — Reset every API state and clear all persistence (useful for logout)
 - `invalidateAll()` — Mark every cached key as stale in a single state update
-- `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
+- `query(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
 
@@ -337,11 +337,11 @@ A hook for managing individual API calls. Returns an `ApiHandlerResult<T>` with:
 - `data` — The data returned from the API call
 - `error` — The error object if the call failed (`ApiError`)
 - `fetchedAt` — Timestamp (ms since epoch) of the last successful fetch, or `null`
-- `handleApi(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`. **Stable reference** — safe to include in `useEffect` deps
-- `resetApi()` — Reset the API state. **Stable reference**
-- `invalidateApi()` — Mark this endpoint's cache as stale. **Stable reference**
+- `query(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`. **Stable reference** — safe to include in `useEffect` deps
+- `reset()()` — Reset the API state. **Stable reference**
+- `invalidate()()` — Mark this endpoint's cache as stale. **Stable reference**
 
-The hook only subscribes to the state slice for the given key, so changes to other keys won't trigger re-renders. The function references (`handleApi`, `resetApi`, `invalidateApi`) are memoized with `useCallback` and only change when the `key` or `store` argument changes.
+The hook only subscribes to the state slice for the given key, so changes to other keys won't trigger re-renders. The function references (`query`, `reset`, `invalidate`) are memoized with `useCallback` and only change when the `key` or `store` argument changes.
 
 Accepts an optional second argument to use a custom store instance:
 
@@ -413,11 +413,15 @@ const { data } = usePolling<Stats>("stats", () => fetchStats(), 30_000, { immedi
 
 ### `createApiComposer`
 
-Creates a strongly-typed API composer. Returns a hook with all the same fields as `useApiHandler`, including `resetApi`, `invalidateApi`, `status`, and `fetchedAt`. All function references (`handleApi`, `resetApi`, `invalidateApi`) are stable across re-renders. Accepts an optional store instance:
+Creates a strongly-typed API composer. For query endpoints, returns `query`, `reset`, `invalidate`, `status`, and `fetchedAt`. For mutation endpoints, returns `mutate` and `reset`. All function references are stable across re-renders. Accepts optional config with mutation functions:
 
 ```typescript
-const useApi = createApiComposer<MyApiStructure>(); // uses default store
-const useApi = createApiComposer<MyApiStructure>(useStore); // uses custom store
+const useApi = createApiComposer<MyApiStructure>(); // queries only
+const useApi = createApiComposer<MyApiStructure>({ // with mutations
+  mutations: {
+    createUser: (payload) => api.createUser(payload)
+  }
+});
 ```
 
 ### `FetchStatus`
@@ -431,7 +435,7 @@ A constant object representing the different states of an API call:
 
 ### `ApiCallOptions<T>`
 
-Options you can pass to `handleApi`. The type parameter `T` is inferred automatically from the API call.
+Options you can pass to `query()` and `mutate()`. The type parameter `T` is inferred automatically from the API call.
 
 - `onSuccess?: (data: T) => void` — called with the **typed** response data after a successful response
 - `onError?: (error: ApiError) => void` — called with the error after all retries are exhausted
@@ -494,7 +498,7 @@ Pass an `AbortSignal` to cancel an in-flight request. The signal is also respect
 
 ```typescript
 function SearchComponent() {
-  const { data, isLoading, handleApi } =
+  const { data, isLoading, query } =
     useApiHandler<SearchResult[]>("search");
   const controllerRef = useRef<AbortController>();
 
@@ -503,7 +507,7 @@ function SearchComponent() {
     controllerRef.current?.abort();
     controllerRef.current = new AbortController();
 
-    handleApi(() => searchApi(query), {
+    query(() => searchApi(query), {
       signal: controllerRef.current.signal,
     });
   };
@@ -517,7 +521,7 @@ function SearchComponent() {
 Set `retry` to automatically retry on failure with exponential back-off (capped at 10 seconds):
 
 ```typescript
-handleApi(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts)
+query(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts)
 ```
 
 ### Conditional retries with `shouldRetry`
@@ -525,7 +529,7 @@ handleApi(() => fetchData(), { retry: 3 }); // up to 3 retries (4 total attempts
 Use `shouldRetry` to skip retries for specific error types. The predicate receives the error and the current attempt index (0-based):
 
 ```typescript
-handleApi(() => fetchData(), {
+query(() => fetchData(), {
   retry: 3,
   shouldRetry: (error, attempt) => {
     // Don't retry auth errors or client errors
@@ -541,7 +545,7 @@ handleApi(() => fetchData(), {
 Use `backoff` to provide a custom delay function. It receives the attempt index and should return the delay in milliseconds:
 
 ```typescript
-handleApi(() => fetchData(), {
+query(() => fetchData(), {
   retry: 3,
   // Linear back-off: 500ms, 1000ms, 1500ms
   backoff: (attempt) => 500 * (attempt + 1),
@@ -560,12 +564,12 @@ Use `staleTime` to avoid redundant refetches. If the data was successfully fetch
 
 ```typescript
 function UserProfile({ userId }: { userId: number }) {
-  const { data, handleApi } = useApiHandler<User>("user");
+  const { data, query } = useApiHandler<User>("user");
 
   useEffect(() => {
     // Won't refetch if the last successful fetch was less than 30 seconds ago
-    handleApi(() => fetchUser(userId), { staleTime: 30_000 });
-  }, [userId, handleApi]); // handleApi is stable — won't trigger extra fetches
+    query(() => fetchUser(userId), { staleTime: 30_000 });
+  }, [userId, query]); // query is stable — won't trigger extra fetches
 
   return <div>{data?.name}</div>;
 }
@@ -575,43 +579,43 @@ The `staleTime` check uses the `fetchedAt` timestamp stored in each endpoint's s
 
 ## Cache Invalidation
 
-Use `invalidateApi` to mark a key's cache as stale without removing the existing data. The next `handleApi` call with `staleTime` will refetch instead of returning the cache:
+Use `invalidate()` to mark a key's cache as stale without removing the existing data. The next `query()` call with `staleTime` will refetch instead of returning the cache:
 
 ```typescript
 function UserSettings() {
-  const { data, handleApi, invalidateApi } = useApiHandler<User>("user");
+  const { data, query, invalidate() } = useApiHandler<User>("user");
 
   const updateName = async (name: string) => {
     await saveUserName(name);
     // Mark the user cache as stale — data is still visible,
     // but the next fetch with staleTime will hit the server
-    invalidateApi();
+    invalidate()();
   };
 
   // ...
 }
 ```
 
-You can also call `invalidateApi` directly on the store:
+You can also call `invalidate()` directly on the store:
 
 ```typescript
-useApiStore.getState().invalidateApi("user");
+useApiStore.getState().invalidate()("user");
 ```
 
 To invalidate multiple keys at once, see [Batch Operations](#batch-operations).
 
 ## Batch Operations
 
-Use `invalidateApis` and `resetApiStates` to operate on multiple keys in a **single state update**, avoiding unnecessary intermediate re-renders:
+Use `invalidate()s` and `reset()States` to operate on multiple keys in a **single state update**, avoiding unnecessary intermediate re-renders:
 
 ```typescript
 const store = useApiStore.getState();
 
 // Invalidate multiple caches at once (e.g. after a mutation that affects several endpoints)
-store.invalidateApis(["getUser", "getUserPosts", "getUserSettings"]);
+store.invalidate()s(["getUser", "getUserPosts", "getUserSettings"]);
 
 // Reset multiple keys at once (e.g. clearing all user-related state on logout)
-store.resetApiStates(["getUser", "getUserPosts", "getUserSettings"]);
+store.reset()States(["getUser", "getUserPosts", "getUserSettings"]);
 ```
 
 For a full wipe, use `resetAll` or `invalidateAll`:
@@ -634,12 +638,12 @@ Use `optimisticData` to show data immediately while a request is in-flight. If t
 
 ```typescript
 function ToggleFavorite({ post }: { post: Post }) {
-  const { data, handleApi } = useApiHandler<Post>("updatePost");
+  const { data, query } = useApiHandler<Post>("updatePost");
 
   const toggle = () => {
     const optimistic = { ...post, isFavorite: !post.isFavorite };
 
-    handleApi(() => updatePost(post.id, { isFavorite: !post.isFavorite }), {
+    query(() => updatePost(post.id, { isFavorite: !post.isFavorite }), {
       optimisticData: optimistic,
       onError: () => {
         // The state has already been rolled back automatically
@@ -659,7 +663,7 @@ During the optimistic update the status is `LOADING` and the optimistic data is 
 Use `timeout` to automatically abort a request that takes too long. The error will have code `'TIMEOUT'`:
 
 ```typescript
-handleApi(() => fetchSlowEndpoint(), {
+query(() => fetchSlowEndpoint(), {
   timeout: 5000, // abort after 5 seconds
   onError: (error) => {
     if (error.code === "TIMEOUT") {
@@ -677,10 +681,10 @@ Use `dedupe` to prevent duplicate network calls when multiple components request
 
 ```typescript
 // In ComponentA
-handleApi(() => fetchUser(1), { dedupe: true });
+query(() => fetchUser(1), { dedupe: true });
 
 // In ComponentB (called at the same time)
-handleApi(() => fetchUser(1), { dedupe: true });
+query(() => fetchUser(1), { dedupe: true });
 // ^ reuses the promise from ComponentA — only one network request is made
 ```
 
@@ -729,7 +733,7 @@ Use `onSettled` to run cleanup logic after a request completes, regardless of wh
 ```typescript
 const [modalOpen, setModalOpen] = useState(true);
 
-handleApi(() => submitForm(data), {
+query(() => submitForm(data), {
   onSuccess: () => showToast("Saved!"),
   onError: (error) => showToast(`Failed: ${error.message}`),
   onSettled: () => setModalOpen(false), // always close the modal
@@ -740,11 +744,11 @@ handleApi(() => submitForm(data), {
 
 ## Throw on Error
 
-By default, `handleApi` resolves to `undefined` when a request fails. Use `throwOnError` to reject the promise with the `ApiError` instead, enabling `try/catch` patterns:
+By default, `query()` resolves to `undefined` when a request fails. Use `throwOnError` to reject the promise with the `ApiError` instead, enabling `try/catch` patterns:
 
 ```typescript
 try {
-  const data = await handleApi(() => fetchUser(1), { throwOnError: true });
+  const data = await query(() => fetchUser(1), { throwOnError: true });
   // data is guaranteed non-undefined here
   console.log("User:", data.username);
 } catch (error) {
@@ -776,7 +780,7 @@ const {
 
 function MyComponent() {
   // These are already bound to the custom store — no second argument needed
-  const { data, handleApi } = useFeatureApi<User>("getUser");
+  const { data, query } = useFeatureApi<User>("getUser");
   const isLoading = useFeatureLoading("getUser");
   // ...
 }
@@ -785,7 +789,7 @@ function MyComponent() {
 const { useStore } = createApiStore({ storageKey: "my-feature" });
 
 function MyComponent() {
-  const { data, handleApi } = useApiHandler<User>("getUser", useStore);
+  const { data, query } = useApiHandler<User>("getUser", useStore);
   // ...
 }
 
@@ -827,11 +831,11 @@ import React, { useEffect } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 
 function UserProfile() {
-  const { data, isLoading, handleApi } = useApiHandler<User>("getUser");
+  const { data, isLoading, query } = useApiHandler<User>("getUser");
 
   useEffect(() => {
-    handleApi(() => fetchUser(1), { persist: true });
-  }, [handleApi]);
+    query(() => fetchUser(1), { persist: true });
+  }, [query]);
 
   if (isLoading) return <ActivityIndicator />;
   return (
@@ -863,9 +867,9 @@ const { useStore } = createApiStore({
 
 The hooks are designed for minimal re-renders:
 
-- **Single subscription per hook** — `useApiHandler` and `createApiComposer` subscribe only to the state slice for the given key. Changes to unrelated keys don't trigger re-renders.
-- **Stable function references** — `handleApi`, `resetApi`, and `invalidateApi` are wrapped in `useCallback` and only change when the `key` or `store` argument changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
-- **No extra subscriptions for store methods** — Store actions like `handleApi`, `resetApiState`, and `invalidateApi` are read via `getState()` inside callbacks rather than creating reactive subscriptions, reducing overhead.
+- **Single subscription per hook** — `useApiQuery` and `createApiComposer` subscribe only to the state slice for the given key. Changes to unrelated keys don't trigger re-renders.
+- **Stable function references** — `query`, `reset`, and `invalidate` are wrapped in `useCallback` and only change when the `key` or `store` argument changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
+- **No extra subscriptions for store methods** — Store methods are read via `getState()` inside callbacks rather than creating reactive subscriptions, reducing overhead.
 
 ## Documentation
 

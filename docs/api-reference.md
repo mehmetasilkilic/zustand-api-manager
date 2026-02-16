@@ -5,7 +5,7 @@ Complete API documentation for zustand-api-manager.
 ## Table of Contents
 
 - [Hooks](#hooks)
-  - [useApiHandler](#useapihandler)
+  - [useApiQuery](#useapiquery)
   - [useApiMutation](#useapimutation)
   - [usePolling](#usepolling)
   - [usePrefetch](#useprefetch)
@@ -30,9 +30,9 @@ const {
   isError,
   error,
   fetchedAt,
-  handleApi,
-  resetApi,
-  invalidateApi
+  query,
+  reset,
+  invalidate
 } = useApiQuery<T>(key, store?)
 ```
 
@@ -44,14 +44,14 @@ const {
 
 **Example:**
 ```typescript
-const { data, isLoading, handleApi } = useApiQuery<User>('user')
+const { data, isLoading, query } = useApiQuery<User>('user')
 
 useEffect(() => {
-  handleApi(() => fetchUser(1), {
+  query(() => fetchUser(1), {
     staleTime: 60_000,
     retry: 2
   })
-}, [handleApi])
+}, [query])
 ```
 
 ---
@@ -192,36 +192,36 @@ Execute an API call with full lifecycle management.
 const data = await store.handleApi<T>(key, apiCall, options?)
 ```
 
-### resetApiState
+### reset()State
 
 Reset state for a specific key.
 
 ```typescript
-store.resetApiState(key)
+store.reset()State(key)
 ```
 
-### invalidateApi
+### invalidate()
 
 Mark a key's cache as stale.
 
 ```typescript
-store.invalidateApi(key)
+store.invalidate()(key)
 ```
 
-### invalidateApis
+### invalidate()s
 
 Batch-invalidate multiple keys.
 
 ```typescript
-store.invalidateApis(['user', 'posts', 'settings'])
+store.invalidate()s(['user', 'posts', 'settings'])
 ```
 
-### resetApiStates
+### reset()States
 
 Batch-reset multiple keys.
 
 ```typescript
-store.resetApiStates(['user', 'posts'])
+store.reset()States(['user', 'posts'])
 ```
 
 ### resetAll
@@ -292,7 +292,7 @@ Create an isolated store instance.
 ```typescript
 const {
   useStore,
-  useApiHandler,
+  useApiQuery,
   useLoadingStates,
   usePolling,
   useApiMutation,
@@ -484,14 +484,14 @@ configureApiStore({
 
 // Query hook
 function UserProfile({ userId }: { userId: number }) {
-  const { data, isLoading, handleApi } = useApiQuery<User>('user')
+  const { data, isLoading, query } = useApiQuery<User>('user')
 
   useEffect(() => {
-    handleApi(() => api.getUser(userId), {
+    query(() => api.getUser(userId), {
       persist: true,
       staleTime: 60_000
     })
-  }, [userId, handleApi])
+  }, [userId, query])
 
   if (isLoading) return <Loading />
   return <div>{data?.name}</div>
