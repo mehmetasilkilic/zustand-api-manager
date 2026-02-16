@@ -25,12 +25,17 @@ Common issues and their solutions.
 ```typescript
 // ❌ Wrong - store method doesn't subscribe
 const handleClick = () => {
-  useApiStore.getState().query('users', fetchUsers)
+  useApiStore.getState().handleApi('users', fetchUsers)
 }
 
-// ✅ Correct - use the hook
+// ✅ Correct - use the hook with declarative mode
+const { data } = useApiQuery('users', {
+  queryFn: () => fetchUsers()
+})
+
+// ✅ Or use the hook imperatively
 const { query } = useApiQuery('users')
-const handleClick = () => query(fetchUsers)
+const handleClick = () => query(() => fetchUsers())
 ```
 
 ### Data Persisted Incorrectly
@@ -41,13 +46,10 @@ const handleClick = () => query(fetchUsers)
 
 ```typescript
 // Persist
-query(fetchUser, { persist: true })
+useApiQuery('user', { queryFn: fetchUser, persist: true })
 
-// Don't persist
-query(fetchUser, { persist: false })
-
-// No change to persistence
-query(fetchUser) // or { persist: undefined }
+// Don't persist (default)
+useApiQuery('user', { queryFn: fetchUser })
 ```
 
 ---
@@ -58,17 +60,24 @@ query(fetchUser) // or { persist: undefined }
 
 **Problem**: `useEffect` causes infinite requests.
 
-**Solution**: `query` is stable - include it in dependencies:
+**Solution**: Use declarative mode instead of `useEffect` + `query()`:
 
 ```typescript
-// ✅ Correct - query is stable
+// ✅ Best - declarative mode handles fetching automatically
+const { data } = useApiQuery('user', {
+  queryFn: () => fetchUser(userId),
+  staleTime: 60_000
+})
+
+// ✅ Also fine - query is stable in deps
+const { query } = useApiQuery('user')
 useEffect(() => {
-  query(fetchUser)
-}, [query])
+  query(() => fetchUser(userId))
+}, [userId, query])
 
 // ❌ Wrong - missing dependency
 useEffect(() => {
-  query(fetchUser)
+  query(() => fetchUser(userId))
 }, []) // ESLint warning
 ```
 
@@ -101,12 +110,12 @@ const { mutate } = useApiMutation('updateUser', updateUser)
 
 await mutate(data, {
   onSuccess: () => {
-    useApiStore.getState().invalidate()('user')
+    useApiStore.getState().invalidateApi('user')
   }
 })
 
 // Or use shorter staleTime
-query(fetchUser, { staleTime: 5_000 })
+useApiQuery('user', { queryFn: fetchUser, staleTime: 5_000 })
 ```
 
 ### Cache Not Working
@@ -117,11 +126,14 @@ query(fetchUser, { staleTime: 5_000 })
 
 ```typescript
 // ✅ Consistent key
-const KEY = 'user'
-query(fetchUser, { staleTime: 60_000 })
+const { data } = useApiQuery<User>('user', {
+  queryFn: () => fetchUser(1),
+  staleTime: 60_000
+})
 
 // ❌ Different keys = different cache
-query(fetchUser, { staleTime: 60_000 }) // uses random key each time
+useApiQuery('user-1', { queryFn: () => fetchUser(1) })
+useApiQuery('user-2', { queryFn: () => fetchUser(1) }) // separate cache!
 ```
 
 ---
@@ -136,10 +148,14 @@ query(fetchUser, { staleTime: 60_000 }) // uses random key each time
 
 ```typescript
 // ✅ Correct
-const { data } = useApiQuery<User>('user')
+const { data } = useApiQuery<User>('user', {
+  queryFn: () => fetchUser(1)
+})
 
 // ❌ Wrong
-const { data } = useApiQuery('user') // data is unknown
+const { data } = useApiQuery('user', {
+  queryFn: () => fetchUser(1)
+}) // data is unknown
 ```
 
 ### ApiCallOptions Error
@@ -151,14 +167,10 @@ const { data } = useApiQuery('user') // data is unknown
 ```typescript
 interface User { name: string }
 
-const { query } = useApiQuery<User>('user')
-
-query(fetchUser, {
+const { data } = useApiQuery<User>('user', {
+  queryFn: () => fetchUser(1),
   // ✅ Correct - data is typed as User
   onSuccess: (data) => console.log(data.name),
-
-  // ❌ Wrong - type mismatch
-  onSuccess: (data: string) => console.log(data)
 })
 ```
 
@@ -174,7 +186,7 @@ query(fetchUser, {
 
 ```typescript
 // ✅ Only re-renders when 'user' changes
-const { data } = useApiQuery('user')
+const { data } = useApiQuery('user', { queryFn: fetchUser })
 
 // ❌ Re-renders on any state change
 const allState = useApiStore(state => state.apiStates)
@@ -226,11 +238,12 @@ const storage = typeof window !== 'undefined'
 
 ```typescript
 // ❌ Can cause hydration issues
-query(fetchUser, { persist: true })
+useApiQuery('user', { queryFn: fetchUser, persist: true })
 
 // ✅ Better - only persist after user action
+const { query } = useApiQuery('user')
 const handleSave = () => {
-  query(saveUser, { persist: true })
+  query(() => saveUser(data), { persist: true })
 }
 ```
 
@@ -299,8 +312,8 @@ const { useStore } = createApiStore({
 
 ```typescript
 configureApiStore({
-  onSuccess: (data, key) => console.log(`✅ ${key}:`, data),
-  onError: (error, key) => console.error(`❌ ${key}:`, error)
+  onSuccess: (data, key) => console.log(`${key}:`, data),
+  onError: (error, key) => console.error(`${key}:`, error)
 })
 ```
 

@@ -10,6 +10,8 @@ Complete API documentation for zustand-api-manager.
   - [usePolling](#usepolling)
   - [usePrefetch](#useprefetch)
   - [useLoadingStates](#useloadingstates)
+- [Composer](#composer)
+  - [createApiComposer](#createapicomposer)
 - [Store Methods](#store-methods)
 - [Configuration](#configuration)
 - [Types](#types)
@@ -18,40 +20,65 @@ Complete API documentation for zustand-api-manager.
 
 ### useApiQuery
 
-Manages query operations (GET requests, read operations).
+Manages query operations (GET requests, read operations). Supports two modes:
+
+- **Declarative mode** — provide `queryFn` in options to auto-fetch on mount and when `key`/`enabled` changes
+- **Observer mode** — omit options to read state without triggering a fetch
 
 ```typescript
-const {
-  data,
-  status,
-  isIdle,
-  isLoading,
-  isSuccess,
-  isError,
-  error,
-  fetchedAt,
-  query,
-  reset,
-  invalidate
-} = useApiQuery<T>(key, store?)
+// Declarative mode — auto-fetches
+const { data, isLoading } = useApiQuery<T>(key, {
+  queryFn: () => fetchData(),
+  enabled: true,
+  staleTime: 60_000
+})
+
+// Observer mode — read-only
+const { data } = useApiQuery<T>(key)
 ```
 
 **Parameters:**
 - `key` (string): Unique identifier for the endpoint
-- `store?` (optional): Custom store instance
+- `options?` (`UseApiQueryOptions<T>`): Options including `queryFn`, `enabled`, and all `ApiCallOptions<T>`
 
-**Returns:** `ApiHandlerResult<T>`
+**Returns:** `ApiQueryResult<T>`
 
-**Example:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `data` | `T \| null` | Response data |
+| `status` | `FetchStatus` | Raw status value |
+| `isIdle` | `boolean` | No request made yet |
+| `isLoading` | `boolean` | Request in progress |
+| `isSuccess` | `boolean` | Last request succeeded |
+| `isError` | `boolean` | Last request failed |
+| `error` | `ApiError \| null` | Error from last failure |
+| `fetchedAt` | `number \| null` | Timestamp of last success |
+| `query` | `function` | Trigger fetch imperatively |
+| `reset` | `function` | Reset state to idle |
+| `invalidate` | `function` | Mark cache as stale |
+
+**Declarative Example:**
 ```typescript
-const { data, isLoading, query } = useApiQuery<User>('user')
-
-useEffect(() => {
-  query(() => fetchUser(1), {
+function UserProfile({ userId }: { userId: number }) {
+  const { data, isLoading } = useApiQuery<User>('user', {
+    queryFn: () => fetchUser(userId),
     staleTime: 60_000,
     retry: 2
   })
-}, [query])
+
+  if (isLoading) return <Loading />
+  return <div>{data?.name}</div>
+}
+```
+
+**Imperative Example:**
+```typescript
+const { query } = useApiQuery<User>('user')
+
+const handleClick = async () => {
+  const user = await query(() => fetchUser(1), { staleTime: 60_000 })
+  console.log(user?.name)
+}
 ```
 
 ---
@@ -71,13 +98,12 @@ const {
   error,
   mutate,
   reset
-} = useApiMutation<T, V>(key, mutationFn, store?)
+} = useApiMutation<T, V>(key, mutationFn)
 ```
 
 **Parameters:**
 - `key` (string): Unique identifier
 - `mutationFn` (function): `(variables: V) => Promise<{ data: T }>`
-- `store?` (optional): Custom store instance
 
 **Returns:** `ApiMutationResult<T, V>`
 
@@ -98,13 +124,7 @@ await mutate({ name: 'John', email: 'john@example.com' })
 Polls an endpoint at regular intervals.
 
 ```typescript
-const result = usePolling<T>(
-  key,
-  apiCall,
-  interval,
-  options?,
-  store?
-)
+const result = usePolling<T>(key, apiCall, interval, options?)
 ```
 
 **Parameters:**
@@ -112,7 +132,6 @@ const result = usePolling<T>(
 - `apiCall` (function): API call function
 - `interval` (number): Polling interval in milliseconds
 - `options?` (object): Options with `immediate` and `enabled`
-- `store?` (optional): Custom store instance
 
 **Options:**
 - `immediate?: boolean` - Fire first request immediately
@@ -136,7 +155,7 @@ const { data } = usePolling<Notification[]>(
 Prefetches data without triggering UI updates.
 
 ```typescript
-const { prefetch } = usePrefetch(store?)
+const { prefetch } = usePrefetch()
 ```
 
 **Returns:** Object with `prefetch` function
@@ -159,12 +178,11 @@ const handleMouseEnter = (id: number) => {
 Checks loading state for one or more keys.
 
 ```typescript
-const isLoading = useLoadingStates(keys?, store?)
+const isLoading = useLoadingStates(keys?)
 ```
 
 **Parameters:**
 - `keys?` (string | string[] | undefined): Keys to check
-- `store?` (optional): Custom store instance
 
 **Returns:** `boolean`
 
@@ -182,6 +200,82 @@ const isDataLoading = useLoadingStates(['user', 'posts'])
 
 ---
 
+## Composer
+
+### createApiComposer
+
+Create a type-safe API composer that supports both query and mutation endpoints with declarative auto-fetching. Both query and mutation functions are bound at composer creation time.
+
+```typescript
+import {
+  createApiComposer,
+  ApiQueryEndpoint,
+  ApiMutationEndpoint
+} from 'zustand-api-manager'
+
+interface MyApi {
+  // Query endpoints (read operations)
+  getUser: ApiQueryEndpoint<{ id: number }, User>
+  listPosts: ApiQueryEndpoint<void, Post[]>
+
+  // Mutation endpoints (write operations)
+  createPost: ApiMutationEndpoint<CreatePostPayload, Post>
+  updatePost: ApiMutationEndpoint<UpdatePostPayload, Post>
+}
+
+const useApi = createApiComposer<MyApi>({
+  queries: {
+    getUser: (params) => api.getUser(params),
+    listPosts: () => api.listPosts()
+  },
+  mutations: {
+    createPost: (payload) => api.createPost(payload),
+    updatePost: (payload) => api.updatePost(payload)
+  }
+})
+```
+
+**Declarative mode** — pass options as second argument to auto-fetch:
+
+```typescript
+// With params
+const { data } = useApi('getUser', { params: { id: 1 } })
+
+// Void params
+const { data } = useApi('listPosts', {})
+
+// With enabled
+const { data } = useApi('getUser', { params: { id: 1 }, enabled: isReady })
+```
+
+**Observer mode** — omit second argument:
+
+```typescript
+const { data } = useApi('getUser') // reads state without fetching
+```
+
+**Imperative mode:**
+
+```typescript
+const { query } = useApi('getUser')
+query({ id: 1 })
+query({ id: 1 }, { staleTime: 60_000 })
+
+// Void-param query
+const { query: listQuery } = useApi('listPosts')
+listQuery()
+
+// Mutation
+const { mutate, isLoading } = useApi('createPost')
+mutate({ title: 'Hello', content: '...' })
+```
+
+**Key Differences:**
+- **Query endpoints** (`ApiQueryEndpoint`) return `query`, `reset`, `invalidate`, and `fetchedAt`
+- **Mutation endpoints** (`ApiMutationEndpoint`) return `mutate` and `reset` (no invalidate or fetchedAt)
+
+---
+
 ## Store Methods
 
 ### handleApi
@@ -192,36 +286,36 @@ Execute an API call with full lifecycle management.
 const data = await store.handleApi<T>(key, apiCall, options?)
 ```
 
-### reset()State
+### resetApiState
 
 Reset state for a specific key.
 
 ```typescript
-store.reset()State(key)
+store.resetApiState(key)
 ```
 
-### invalidate()
+### invalidateApi
 
 Mark a key's cache as stale.
 
 ```typescript
-store.invalidate()(key)
+store.invalidateApi(key)
 ```
 
-### invalidate()s
+### invalidateApis
 
 Batch-invalidate multiple keys.
 
 ```typescript
-store.invalidate()s(['user', 'posts', 'settings'])
+store.invalidateApis(['user', 'posts', 'settings'])
 ```
 
-### reset()States
+### resetApiStates
 
 Batch-reset multiple keys.
 
 ```typescript
-store.reset()States(['user', 'posts'])
+store.resetApiStates(['user', 'posts'])
 ```
 
 ### resetAll
@@ -328,69 +422,26 @@ configureApiStore({
 
 ---
 
-### createApiComposer
+## Types
 
-Create a type-safe API composer that supports both query and mutation endpoints. Both query and mutation functions are bound at composer creation time.
+### UseApiQueryOptions<T>
+
+Options for `useApiQuery` declarative mode. Extends `ApiCallOptions<T>`.
 
 ```typescript
-import {
-  createApiComposer,
-  ApiQueryEndpoint,
-  ApiMutationEndpoint
-} from 'zustand-api-manager'
-
-interface MyApi {
-  // Query endpoints (read operations)
-  getUser: ApiQueryEndpoint<{ id: number }, User>
-  listPosts: ApiQueryEndpoint<void, Post[]>
-
-  // Mutation endpoints (write operations)
-  createPost: ApiMutationEndpoint<CreatePostPayload, Post>
-  updatePost: ApiMutationEndpoint<UpdatePostPayload, Post>
+interface UseApiQueryOptions<T> extends ApiCallOptions<T> {
+  queryFn?: () => Promise<{ data: T }>
+  enabled?: boolean
 }
-
-const useApi = createApiComposer<MyApi>({
-  queries: {
-    getUser: (params) => api.getUser(params),
-    listPosts: () => api.listPosts()
-  },
-  mutations: {
-    createPost: (payload) => api.createPost(payload),
-    updatePost: (payload) => api.updatePost(payload)
-  }
-})
-
-// Query usage - function is pre-bound, just pass params and options
-const { data, query } = useApi('getUser')
-query({ id: 1 })
-query({ id: 1 }, { staleTime: 60_000 })
-
-// Void-param query - no arguments needed
-const { query: listQuery } = useApi('listPosts')
-listQuery()
-
-// Mutation usage - function is pre-bound
-const { mutate, isLoading } = useApi('createPost')
-mutate({ title: 'Hello', content: '...' })
 ```
 
-**Key Differences:**
-- **Query endpoints** (`ApiQueryEndpoint`) return `query`, `reset`, `invalidate`, and `fetchedAt`
-- **Mutation endpoints** (`ApiMutationEndpoint`) return `mutate` and `reset` (no invalidate or fetchedAt)
-- Both query and mutation functions are bound at composer creation via the `queries` and `mutations` config
+### ComposerDeclarativeOptions
 
-**Query endpoints:**
-- `query(params?, options?)` - Execute the query
-- `reset()` - Reset the state
-- `invalidate()` - Invalidate the cache
+Conditional options type for declarative auto-fetching in the composer:
 
-**Mutation endpoints:**
-- `mutate(variables?, options?)` - Execute the mutation
-- `reset()` - Reset the state
-
----
-
-## Types
+- For `ApiQueryEndpoint<P, R>` where `P extends void`: `{ enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
+- For `ApiQueryEndpoint<P, R>` where P is not void: `{ params: P; enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
+- For mutations: `never`
 
 ### ApiCallOptions<T>
 
@@ -490,16 +541,13 @@ configureApiStore({
   onError: (error) => console.error(error)
 })
 
-// Query hook
+// Declarative query hook
 function UserProfile({ userId }: { userId: number }) {
-  const { data, isLoading, query } = useApiQuery<User>('user')
-
-  useEffect(() => {
-    query(() => api.getUser(userId), {
-      persist: true,
-      staleTime: 60_000
-    })
-  }, [userId, query])
+  const { data, isLoading } = useApiQuery<User>('user', {
+    queryFn: () => api.getUser(userId),
+    persist: true,
+    staleTime: 60_000
+  })
 
   if (isLoading) return <Loading />
   return <div>{data?.name}</div>

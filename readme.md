@@ -22,14 +22,12 @@ A powerful, lightweight, and flexible API state management solution built on top
 import { useApiQuery } from 'zustand-api-manager'
 
 function UserProfile({ userId }) {
-  const { data, isLoading, query } = useApiQuery<User>('user')
-
-  useEffect(() => {
-    query(() => fetchUser(userId), {
-      staleTime: 60_000, // Cache for 1 minute
-      retry: 2 // Retry twice on failure
-    })
-  }, [userId, query])
+  // Declarative mode — auto-fetches on mount and when userId changes
+  const { data, isLoading } = useApiQuery<User>('user', {
+    queryFn: () => fetchUser(userId),
+    staleTime: 60_000,
+    retry: 2
+  })
 
   if (isLoading) return <Loading />
   return <div>{data?.name}</div>
@@ -44,6 +42,8 @@ function UserProfile({ userId }) {
 - [Features](#features)
 - [Usage](#usage)
   - [Basic Usage](#basic-usage)
+  - [Observer Mode](#observer-mode)
+  - [Imperative Mode](#imperative-mode)
   - [Global Loading](#global-loading)
   - [Advanced Usage (Composer)](#advanced-usage-composer)
 - [API Reference](#api-reference)
@@ -122,6 +122,8 @@ npm install zustand-api-manager zustand immer
 - Easy-to-use API state management
 - Built on top of Zustand for efficient state updates
 - Support for idle, loading, success, and error states
+- **Declarative auto-fetching** — provide `queryFn` and data is fetched automatically on mount
+- **Observer mode** — multiple components can read the same key without triggering extra fetches
 - `query` returns the response data directly on success
 - **Stable function references** — `query`, `reset`, and `invalidate` are wrapped in `useCallback` and safe to use in `useEffect` dependency arrays
 - **Optimized subscriptions** — hooks subscribe only to the data slice that changes; store methods are read without creating extra subscriptions
@@ -132,85 +134,116 @@ npm install zustand-api-manager zustand immer
 - Automatic retry with exponential back-off, customizable `shouldRetry` and `backoff` strategies
 - Race condition protection (stale responses are automatically discarded)
 - Built-in caching via `staleTime` — skip refetches when data is fresh
-- Cache invalidation via `invalidate()` / `invalidate()s` — mark data as stale without removing it
-- Batch operations via `invalidate()s`, `reset()States`, `resetAll`, and `invalidateAll`
+- Cache invalidation via `invalidate` — mark data as stale without removing it
+- Batch operations via `invalidateApis`, `resetApiStates`, `resetAll`, and `invalidateAll`
 - Optimistic updates with automatic rollback on error
 - Request timeout with `TIMEOUT` error code
 - Request deduplication via `dedupe` — concurrent calls share a single in-flight promise
 - `throwOnError` option — reject the promise instead of resolving to `undefined` on failure
 - `onSettled` callback — runs after both success and error for cleanup
 - `usePolling` hook for interval-based refetching with `immediate` option, `enabled` toggle, and overlap guard
+- `useApiMutation` hook for mutations with better semantics
+- `usePrefetch` for preloading data
+- `cancelAll` and `cancelRequest` for request cancellation
+- `revalidateOnStale` for stale-while-revalidate pattern
 - `fetchedAt` timestamp tracking for every endpoint
 - SSR-safe (no `localStorage` access on the server)
 - Factory function for multiple fully isolated store instances with pre-bound hooks
+- Global configuration with `configureApiStore`
+- DevTools integration for debugging
 - TypeScript support with strong typing (including typed `onSuccess` callbacks)
-- **NEW:** `useApiMutation` hook for mutations with better semantics
-- **NEW:** Global configuration with `configureApiStore`
-- **NEW:** Extended lifecycle hooks: `onStart`, `onBeforeRetry`, `onCacheHit`
-- **NEW:** `usePrefetch` for preloading data
-- **NEW:** `cancelAll` and `cancelRequest` for request cancellation
-- **NEW:** `revalidateOnStale` for stale-while-revalidate pattern
-- **NEW:** DevTools integration for debugging
-- **NEW:** Comprehensive examples and documentation
 
 ## Usage
 
 ### Basic Usage
 
-1. Import the necessary functions:
+The recommended way to use `useApiQuery` is **declarative mode** — provide a `queryFn` and the hook automatically fetches on mount:
 
 ```typescript
-import { useApiQuery, FetchStatus } from "zustand-api-manager";
-```
+import { useApiQuery } from "zustand-api-manager";
 
-2. Use the `useApiQuery` hook for queries (GET requests):
-
-```typescript
 interface UserData {
   id: number;
   username: string;
 }
 
-function MyComponent() {
-  const { data, isIdle, isLoading, isError, status, query } =
-    useApiQuery<UserData>("user");
+function MyComponent({ userId }: { userId: number }) {
+  const { data, isLoading, isError, error } = useApiQuery<UserData>("user", {
+    queryFn: () => fetchUserData(userId),
+    staleTime: 30_000, // Cache for 30 seconds
+    onSuccess: (data) => {
+      console.log("User data fetched!", data.username);
+    },
+    onError: (error) => {
+      console.error("An error occurred:", error.message);
+    },
+  });
 
-  const params = { id: 13 };
-
-  useEffect(() => {
-    query(
-      () => fetchUserData(params), // API call (close over your params)
-      {
-        onSuccess: (data) => {
-          // `data` is typed as UserData
-          console.log("User data fetched successfully!", data.username);
-        },
-        onError: (error) => {
-          console.error("An error occurred:", error.message);
-        },
-        persist: true,
-      }
-    );
-  }, [query]); // query is stable — safe to include in deps
-
-  if (isIdle) return <div>Ready to fetch</div>;
   if (isLoading) return <div>Loading...</div>;
-  if (isError) return <div>Error occurred</div>;
-
+  if (isError) return <div>Error: {error?.message}</div>;
   return <div>{data?.username}</div>;
 }
 ```
 
-> **Note:** `query`, `reset`, and `invalidate` are referentially stable (wrapped in `useCallback`), so they won't cause infinite loops when listed in `useEffect` dependency arrays.
-
-`query` returns a `Promise<T | undefined>`, so you can also use its return value directly:
+The hook automatically refetches when `key` changes. Use `enabled` to control when fetching happens:
 
 ```typescript
-const user = await query(() => fetchUserData(params));
-if (user) {
-  console.log("Got user:", user.username);
+function ConditionalFetch({ userId, isReady }: { userId: number; isReady: boolean }) {
+  const { data, isLoading } = useApiQuery<UserData>("user", {
+    queryFn: () => fetchUserData(userId),
+    enabled: isReady, // Won't fetch until isReady is true
+  });
+
+  // ...
 }
 ```
+
+### Observer Mode
+
+When you omit `queryFn`, the hook acts as a **read-only observer** — it subscribes to a key's state without triggering any fetch. This is useful when one component owns the fetch and others just read the result:
+
+```typescript
+// Component A: owns the fetch
+function UserFetcher({ userId }: { userId: number }) {
+  const { data } = useApiQuery<User>("user", {
+    queryFn: () => fetchUser(userId),
+  });
+  return <div>{data?.name}</div>;
+}
+
+// Component B: reads the same data without fetching
+function UserBadge() {
+  const { data } = useApiQuery<User>("user"); // observer mode
+  return <span>{data?.name}</span>;
+}
+```
+
+### Imperative Mode
+
+You can still trigger fetches manually using the `query` function:
+
+```typescript
+function SearchComponent() {
+  const { data, isLoading, query } = useApiQuery<SearchResult[]>("search");
+
+  const onSearch = async (term: string) => {
+    const results = await query(() => searchApi(term));
+    if (results) {
+      console.log("Found:", results.length, "results");
+    }
+  };
+
+  return (
+    <div>
+      <input onChange={(e) => onSearch(e.target.value)} />
+      {isLoading && <Spinner />}
+      {data?.map((r) => <div key={r.id}>{r.title}</div>)}
+    </div>
+  );
+}
+```
+
+> **Note:** `query`, `reset`, and `invalidate` are referentially stable (wrapped in `useCallback`), so they won't cause infinite loops when listed in `useEffect` dependency arrays.
 
 ### Global Loading
 
@@ -234,7 +267,6 @@ function Dashboard() {
       {isAnyLoading && <div>Loading something...</div>}
       {isUserOrPostsLoading && <div>Loading user or posts...</div>}
       {isUserLoading && <div>Loading user data...</div>}
-      {/* Rest of your component */}
     </div>
   );
 }
@@ -242,7 +274,7 @@ function Dashboard() {
 
 ### Advanced Usage (Composer)
 
-The composer provides a fully type-safe API hook factory with parameter passthrough.
+The composer provides a fully type-safe API hook factory with parameter passthrough and declarative auto-fetching.
 
 1. Define your API structure and create the composer with bound query and mutation functions:
 
@@ -270,33 +302,65 @@ export const useApi = createApiComposer<MyApiStructure>({
 });
 ```
 
-2. Use it in your components. For endpoints with parameters, pass them as the first argument:
+2. Use declarative mode by passing options as the second argument. For endpoints with parameters, provide `params`:
 
 ```typescript
 function PostDetail({ postId }: { postId: number }) {
-  const { data, isLoading, query, reset } = useApi("getPost");
-
-  useEffect(() => {
-    query({ id: postId });
-  }, [postId, query]); // query is stable — won't cause extra fetches
+  // Auto-fetches on mount and when postId changes
+  const { data, isLoading } = useApi("getPost", { params: { id: postId } });
 
   if (isLoading) return <Spinner />;
   return <div>{data?.title}</div>;
 }
 ```
 
-For endpoints with `void` params, call `query` with no arguments (or just options):
+For endpoints with `void` params, pass an empty options object:
 
 ```typescript
 function UserList() {
-  const { data, isLoading, query } = useApi("getUsers");
-
-  useEffect(() => {
-    query();
-  }, [query]); // stable reference — safe in deps
+  // Auto-fetches on mount
+  const { data, isLoading } = useApi("getUsers", {});
 
   if (isLoading) return <Spinner />;
   return <ul>{data?.map((u) => <li key={u.id}>{u.name}</li>)}</ul>;
+}
+```
+
+Use `enabled` to conditionally fetch:
+
+```typescript
+function PostDetail({ postId, isReady }: { postId: number; isReady: boolean }) {
+  const { data } = useApi("getPost", {
+    params: { id: postId },
+    enabled: isReady,
+  });
+  // ...
+}
+```
+
+Observer mode (no second argument) and imperative `query()` still work:
+
+```typescript
+function PostObserver() {
+  const { data } = useApi("getPost"); // reads state without fetching
+
+  // Or trigger manually:
+  const { query } = useApi("getPost");
+  const handleClick = () => query({ id: 1 });
+}
+```
+
+Mutations use `mutate()`:
+
+```typescript
+function CreatePost() {
+  const { mutate, isLoading } = useApi("createPost");
+
+  const handleSubmit = () => {
+    mutate({ title: "Hello", body: "World" });
+  };
+
+  return <button onClick={handleSubmit}>Create</button>;
 }
 ```
 
@@ -307,15 +371,17 @@ function UserList() {
 The default singleton store for managing API states. Provides the following methods:
 
 - `setApiState(key, state, persist?)` — Update the state for a specific API key. `persist` is three-state: `true` marks for persistence, `false` removes persistence, `undefined` (omitted) leaves persistence unchanged
-- `reset()State(key)` — Reset the state for a specific API key
-- `invalidate()(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
-- `invalidate()s(keys)` — Batch-invalidate multiple keys in a single state update
-- `reset()States(keys)` — Batch-reset multiple keys in a single state update
+- `resetApiState(key)` — Reset the state for a specific API key
+- `invalidateApi(key)` — Mark a key's cache as stale (clears `fetchedAt` without removing data)
+- `invalidateApis(keys)` — Batch-invalidate multiple keys in a single state update
+- `resetApiStates(keys)` — Batch-reset multiple keys in a single state update
 - `resetAll()` — Reset every API state and clear all persistence (useful for logout)
 - `invalidateAll()` — Mark every cached key as stale in a single state update
-- `query(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
+- `handleApi(key, apiCall, options?)` — Handle an API call with automatic state management. Returns `Promise<T | undefined>` (the response data on success, `undefined` otherwise)
 - `addMiddleware(middleware)` — Add middleware; returns an **unsubscribe** function
 - `addErrorHandler(handler)` — Add a global error handler; returns an **unsubscribe** function
+- `cancelAll()` — Cancel all in-flight requests
+- `cancelRequest(key)` — Cancel a specific in-flight request
 
 ### `createApiStore(config?)`
 
@@ -324,22 +390,38 @@ Factory function that creates an isolated store instance **with pre-bound conven
 ```typescript
 import { createApiStore } from "zustand-api-manager";
 
-const { useStore, useApiHandler, useLoadingStates, usePolling, createApiComposer } =
-  createApiStore({
-    storageKey: "my-app-api", // localStorage key (default: 'api_store')
-    storage: customStorage, // custom storage backend (optional)
-  });
+const {
+  useStore,
+  useApiQuery,
+  useLoadingStates,
+  usePolling,
+  useApiMutation,
+  usePrefetch,
+  createApiComposer,
+} = createApiStore({
+  storageKey: "my-app-api", // localStorage key (default: 'api_store')
+  storage: customStorage, // custom storage backend (optional)
+});
 
 // Bound hooks — no need to pass the store argument
-const { data } = useApiHandler<User>("getUser");
+const { data } = useApiQuery<User>("getUser", {
+  queryFn: () => fetchUser(1),
+});
 const isLoading = useLoadingStates("getUser");
 
-const useApi = createApiComposer<MyApiStructure>();
+const useApi = createApiComposer<MyApiStructure>({
+  queries: { getUser: (params) => api.getUser(params) },
+});
 ```
 
-### `useApiHandler`
+### `useApiQuery`
 
-A hook for managing individual API calls. Returns an `ApiHandlerResult<T>` with:
+A hook for managing API queries. Supports two modes:
+
+- **Declarative mode** — provide `queryFn` in options to auto-fetch on mount
+- **Observer mode** — omit options to read state without fetching
+
+Returns an `ApiQueryResult<T>` with:
 
 - `status` — The raw `FetchStatus` value (`'IDLE'`, `'LOADING'`, `'SUCCESS'`, `'ERROR'`)
 - `isIdle` — `true` if the API has not been called yet
@@ -349,17 +431,29 @@ A hook for managing individual API calls. Returns an `ApiHandlerResult<T>` with:
 - `data` — The data returned from the API call
 - `error` — The error object if the call failed (`ApiError`)
 - `fetchedAt` — Timestamp (ms since epoch) of the last successful fetch, or `null`
-- `query(apiCall, options?)` — Trigger the API call. Returns `Promise<T | undefined>`. **Stable reference** — safe to include in `useEffect` deps
-- `reset()()` — Reset the API state. **Stable reference**
-- `invalidate()()` — Mark this endpoint's cache as stale. **Stable reference**
+- `query(apiCall, options?)` — Trigger the API call imperatively. Returns `Promise<T | undefined>`. **Stable reference**
+- `reset()` — Reset the API state. **Stable reference**
+- `invalidate()` — Mark this endpoint's cache as stale. **Stable reference**
 
-The hook only subscribes to the state slice for the given key, so changes to other keys won't trigger re-renders. The function references (`query`, `reset`, `invalidate`) are memoized with `useCallback` and only change when the `key` or `store` argument changes.
+The hook only subscribes to the state slice for the given key, so changes to other keys won't trigger re-renders.
 
-Accepts an optional second argument to use a custom store instance:
+**Options (`UseApiQueryOptions<T>`):**
+
+- `queryFn` — The fetch function. When provided, enables declarative auto-fetch mode.
+- `enabled` — If `false`, the auto-fetch is paused. Defaults to `true`.
+- Plus all `ApiCallOptions<T>` fields (`staleTime`, `retry`, `onSuccess`, etc.)
+
+### `useApiMutation`
+
+A hook for managing mutations (POST, PUT, DELETE). Binds a mutation function at hook level:
 
 ```typescript
-const { useStore } = createApiStore();
-const { data } = useApiHandler<User>("getUser", useStore);
+const { mutate, isLoading, data, error, reset } = useApiMutation<User, CreateUserPayload>(
+  "createUser",
+  (payload) => api.createUser(payload)
+);
+
+await mutate({ name: "John", email: "john@example.com" });
 ```
 
 ### `useLoadingStates`
@@ -370,11 +464,9 @@ A hook to check loading states for one or more API keys:
 - `string`: returns `true` if the given key is loading
 - `string[]`: returns `true` if **any** of the given keys are loading
 
-Also accepts an optional store instance as the second argument.
-
 ### `usePolling`
 
-A React hook for interval-based polling with automatic cleanup on unmount. Returns the same `ApiHandlerResult<T>` as `useApiHandler`.
+A React hook for interval-based polling with automatic cleanup on unmount. Returns the same `ApiQueryResult<T>` as `useApiQuery`.
 
 - `key` — The unique identifier for the API endpoint
 - `apiCall` — A function that returns a promise resolving to `{ data: T }`
@@ -382,7 +474,6 @@ A React hook for interval-based polling with automatic cleanup on unmount. Retur
 - `options` — Optional `ApiCallOptions<T>` with additional fields:
   - `immediate?: boolean` — Fire the first request immediately instead of waiting for the first interval tick
   - `enabled?: boolean` — Toggle polling on/off (default `true`)
-- `store?` — Optional custom store instance
 
 If the previous poll is still in-flight when the next tick fires, the tick is skipped automatically to prevent request stacking.
 
@@ -416,26 +507,33 @@ function LiveFeed({ isActive }: { isActive: boolean }) {
 }
 ```
 
-Also accepts a custom store instance as the last argument:
+### `usePrefetch`
+
+A hook that provides a `prefetch` function for preloading data before it's needed:
 
 ```typescript
-const { useStore } = createApiStore();
-const { data } = usePolling<Stats>("stats", () => fetchStats(), 30_000, { immediate: true }, useStore);
+const { prefetch } = usePrefetch();
+
+const handleMouseEnter = (userId: number) => {
+  prefetch(`user-${userId}`, () => api.getUser(userId), { staleTime: 60_000 });
+};
 ```
 
 ### `createApiComposer`
 
-Creates a strongly-typed API composer. For query endpoints, returns `query`, `reset`, `invalidate`, `status`, and `fetchedAt`. For mutation endpoints, returns `mutate` and `reset`. All function references are stable across re-renders. Accepts optional config with bound query and mutation functions:
+Creates a strongly-typed API composer. For query endpoints, returns `query`, `reset`, `invalidate`, `status`, and `fetchedAt`. For mutation endpoints, returns `mutate` and `reset`. All function references are stable across re-renders.
+
+Supports declarative auto-fetching via an optional second argument with `params` and `enabled`.
 
 ```typescript
 const useApi = createApiComposer<MyApiStructure>({
   queries: {
     getUser: (params) => api.getUser(params),
-    listUsers: () => api.listUsers()
+    listUsers: () => api.listUsers(),
   },
   mutations: {
-    createUser: (payload) => api.createUser(payload)
-  }
+    createUser: (payload) => api.createUser(payload),
+  },
 });
 ```
 
@@ -455,12 +553,16 @@ Options you can pass to `query()` and `mutate()`. The type parameter `T` is infe
 - `onSuccess?: (data: T) => void` — called with the **typed** response data after a successful response
 - `onError?: (error: ApiError) => void` — called with the error after all retries are exhausted
 - `onSettled?: () => void` — called when the request completes, regardless of success or failure (useful for cleanup)
+- `onStart?: () => void` — called when the API call starts
+- `onCacheHit?: (data: T) => void` — called when cached data is returned
+- `onBeforeRetry?: (error: ApiError, attempt: number) => void` — called before each retry attempt
 - `persist?: boolean` — persist this key's state to localStorage
 - `signal?: AbortSignal` — abort the request (from an `AbortController`)
 - `retry?: number` — number of retries on failure (default `0`, exponential back-off)
 - `shouldRetry?: (error: ApiError, attempt: number) => boolean` — predicate to decide whether to retry a specific error (default: always retry)
 - `backoff?: (attempt: number) => number` — custom delay function in ms before retrying (default: `Math.min(1000 * 2 ** attempt, 10000)`)
 - `staleTime?: number` — skip the request if data was fetched within this many milliseconds
+- `revalidateOnStale?: boolean` — return stale data immediately while refetching in the background
 - `optimisticData?: T` — data to show immediately while the request is in-flight (rolled back on error)
 - `timeout?: number` — abort the request if it doesn't complete within this many milliseconds (error code: `'TIMEOUT'`)
 - `dedupe?: boolean` — if `true`, concurrent calls to the same key share the existing in-flight promise
@@ -513,16 +615,14 @@ Pass an `AbortSignal` to cancel an in-flight request. The signal is also respect
 
 ```typescript
 function SearchComponent() {
-  const { data, isLoading, query } =
-    useApiHandler<SearchResult[]>("search");
+  const { data, isLoading, query } = useApiQuery<SearchResult[]>("search");
   const controllerRef = useRef<AbortController>();
 
-  const onSearch = (query: string) => {
-    // Cancel the previous request
+  const onSearch = (term: string) => {
     controllerRef.current?.abort();
     controllerRef.current = new AbortController();
 
-    query(() => searchApi(query), {
+    query(() => searchApi(term), {
       signal: controllerRef.current.signal,
     });
   };
@@ -547,7 +647,6 @@ Use `shouldRetry` to skip retries for specific error types. The predicate receiv
 query(() => fetchData(), {
   retry: 3,
   shouldRetry: (error, attempt) => {
-    // Don't retry auth errors or client errors
     if (error.status === 401 || error.status === 403) return false;
     if (error.status && error.status >= 400 && error.status < 500) return false;
     return true;
@@ -579,12 +678,11 @@ Use `staleTime` to avoid redundant refetches. If the data was successfully fetch
 
 ```typescript
 function UserProfile({ userId }: { userId: number }) {
-  const { data, query } = useApiHandler<User>("user");
-
-  useEffect(() => {
-    // Won't refetch if the last successful fetch was less than 30 seconds ago
-    query(() => fetchUser(userId), { staleTime: 30_000 });
-  }, [userId, query]); // query is stable — won't trigger extra fetches
+  // Won't refetch if the last successful fetch was less than 30 seconds ago
+  const { data } = useApiQuery<User>("user", {
+    queryFn: () => fetchUser(userId),
+    staleTime: 30_000,
+  });
 
   return <div>{data?.name}</div>;
 }
@@ -594,43 +692,46 @@ The `staleTime` check uses the `fetchedAt` timestamp stored in each endpoint's s
 
 ## Cache Invalidation
 
-Use `invalidate()` to mark a key's cache as stale without removing the existing data. The next `query()` call with `staleTime` will refetch instead of returning the cache:
+Use `invalidate()` to mark a key's cache as stale without removing the existing data. The next call with `staleTime` will refetch instead of returning the cache:
 
 ```typescript
 function UserSettings() {
-  const { data, query, invalidate() } = useApiHandler<User>("user");
+  const { data, invalidate } = useApiQuery<User>("user", {
+    queryFn: () => fetchUser(1),
+    staleTime: 60_000,
+  });
 
   const updateName = async (name: string) => {
     await saveUserName(name);
     // Mark the user cache as stale — data is still visible,
     // but the next fetch with staleTime will hit the server
-    invalidate()();
+    invalidate();
   };
 
   // ...
 }
 ```
 
-You can also call `invalidate()` directly on the store:
+You can also call `invalidateApi` directly on the store:
 
 ```typescript
-useApiStore.getState().invalidate()("user");
+useApiStore.getState().invalidateApi("user");
 ```
 
 To invalidate multiple keys at once, see [Batch Operations](#batch-operations).
 
 ## Batch Operations
 
-Use `invalidate()s` and `reset()States` to operate on multiple keys in a **single state update**, avoiding unnecessary intermediate re-renders:
+Use `invalidateApis` and `resetApiStates` to operate on multiple keys in a **single state update**, avoiding unnecessary intermediate re-renders:
 
 ```typescript
 const store = useApiStore.getState();
 
 // Invalidate multiple caches at once (e.g. after a mutation that affects several endpoints)
-store.invalidate()s(["getUser", "getUserPosts", "getUserSettings"]);
+store.invalidateApis(["getUser", "getUserPosts", "getUserSettings"]);
 
 // Reset multiple keys at once (e.g. clearing all user-related state on logout)
-store.reset()States(["getUser", "getUserPosts", "getUserSettings"]);
+store.resetApiStates(["getUser", "getUserPosts", "getUserSettings"]);
 ```
 
 For a full wipe, use `resetAll` or `invalidateAll`:
@@ -653,7 +754,7 @@ Use `optimisticData` to show data immediately while a request is in-flight. If t
 
 ```typescript
 function ToggleFavorite({ post }: { post: Post }) {
-  const { data, query } = useApiHandler<Post>("updatePost");
+  const { data, query } = useApiQuery<Post>("updatePost");
 
   const toggle = () => {
     const optimistic = { ...post, isFavorite: !post.isFavorite };
@@ -661,7 +762,6 @@ function ToggleFavorite({ post }: { post: Post }) {
     query(() => updatePost(post.id, { isFavorite: !post.isFavorite }), {
       optimisticData: optimistic,
       onError: () => {
-        // The state has already been rolled back automatically
         showToast("Failed to update — reverted");
       },
     });
@@ -779,37 +879,23 @@ The store state is still updated normally (status set to `ERROR`, error handlers
 By default, all hooks use a shared singleton store. For SSR, testing, or isolated modules, create separate instances with `createApiStore`. Each store is **fully isolated** — race-condition tracking, request deduplication, and all state are scoped to the store instance, so you can safely reuse the same key names across different stores:
 
 ```typescript
-import {
-  createApiStore,
-  useApiHandler,
-  createApiComposer,
-} from "zustand-api-manager";
+import { createApiStore } from "zustand-api-manager";
 
-// Option A: use the pre-bound hooks returned by createApiStore
 const {
   useStore,
-  useApiHandler: useFeatureApi,
+  useApiQuery: useFeatureQuery,
   useLoadingStates: useFeatureLoading,
   createApiComposer: createFeatureComposer,
 } = createApiStore({ storageKey: "my-feature" });
 
 function MyComponent() {
   // These are already bound to the custom store — no second argument needed
-  const { data, query } = useFeatureApi<User>("getUser");
+  const { data } = useFeatureQuery<User>("getUser", {
+    queryFn: () => fetchUser(1),
+  });
   const isLoading = useFeatureLoading("getUser");
   // ...
 }
-
-// Option B: pass the store explicitly to the standalone hooks
-const { useStore } = createApiStore({ storageKey: "my-feature" });
-
-function MyComponent() {
-  const { data, query } = useApiHandler<User>("getUser", useStore);
-  // ...
-}
-
-// Works with the composer too
-const useApi = createApiComposer<MyApiStructure>(useStore);
 ```
 
 ## Persistence in React Native
@@ -826,7 +912,7 @@ import { createApiStore } from "zustand-api-manager";
 
 const {
   useStore,
-  useApiHandler,
+  useApiQuery,
   useLoadingStates,
   createApiComposer,
 } = createApiStore({
@@ -842,15 +928,14 @@ const {
 Then use the returned hooks exactly like you would with the default store:
 
 ```typescript
-import React, { useEffect } from "react";
+import React from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 
 function UserProfile() {
-  const { data, isLoading, query } = useApiHandler<User>("getUser");
-
-  useEffect(() => {
-    query(() => fetchUser(1), { persist: true });
-  }, [query]);
+  const { data, isLoading } = useApiQuery<User>("getUser", {
+    queryFn: () => fetchUser(1),
+    persist: true,
+  });
 
   if (isLoading) return <ActivityIndicator />;
   return (
@@ -883,8 +968,9 @@ const { useStore } = createApiStore({
 The hooks are designed for minimal re-renders:
 
 - **Single subscription per hook** — `useApiQuery` and `createApiComposer` subscribe only to the state slice for the given key. Changes to unrelated keys don't trigger re-renders.
-- **Stable function references** — `query`, `reset`, and `invalidate` are wrapped in `useCallback` and only change when the `key` or `store` argument changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
+- **Stable function references** — `query`, `reset`, and `invalidate` are wrapped in `useCallback` and only change when the `key` changes. This means they're safe to include in `useEffect` dependency arrays without causing infinite loops.
 - **No extra subscriptions for store methods** — Store methods are read via `getState()` inside callbacks rather than creating reactive subscriptions, reducing overhead.
+- **Declarative auto-fetch uses refs** — `queryFn` and options are stored in refs so changes don't restart the effect. Only `key`, `enabled`, and serialized `params` trigger refetches.
 
 ## Documentation
 
@@ -899,24 +985,11 @@ The hooks are designed for minimal re-renders:
 This package is written in TypeScript and provides strong typing out of the box.
 
 - `ApiCallOptions<T>` is generic — `onSuccess` receives typed data, `optimisticData` is type-checked
-- `useApiHandler<T>` returns a fully typed `ApiHandlerResult<T>`
+- `useApiQuery<T>` returns a fully typed `ApiQueryResult<T>`
+- `UseApiQueryOptions<T>` extends `ApiCallOptions<T>` with `queryFn` and `enabled`
 - `createApiComposer<TApiStructure>()` infers parameter and response types for each endpoint
-- All exported types are available: `ApiState`, `ApiError`, `ApiCallOptions`, `ApiEndpoint`, `ApiStore`, `ApiHandlerResult`, `ApiComposerResult`, `FetchStatus`, etc.
-
-## API Naming
-
-**Clean & Consistent API (v2.0+):**
-```typescript
-import { useApiQuery, useApiMutation } from 'zustand-api-manager'
-
-// Queries (GET, read operations)
-const { data } = useApiQuery<User>('user')
-
-// Mutations (POST, PUT, DELETE, write operations)
-const { mutate } = useApiMutation<User, UpdatePayload>('updateUser', updateUserFn)
-```
-
-> **Note:** If you're upgrading from v1.0, `useApiHandler` has been renamed to `useApiQuery`. Simply find-and-replace in your codebase.
+- `ComposerDeclarativeOptions` provides conditional types for declarative mode per endpoint
+- All exported types are available: `ApiState`, `ApiError`, `ApiCallOptions`, `UseApiQueryOptions`, `ApiStore`, `ApiQueryResult`, `FetchStatus`, etc.
 
 ## Contributing
 

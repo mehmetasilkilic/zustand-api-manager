@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import { createApiStore } from 'zustand-api-manager'
 
 /**
@@ -31,22 +31,22 @@ const api = {
 }
 
 export default function FeatureModule() {
-  const { data, isLoading, query } = useApiQuery<FeatureData>('featureData')
+  // Declarative mode — auto-fetches on mount
+  const { data, isLoading } = useApiQuery<FeatureData>('featureData', {
+    queryFn: () => api.getFeatureData(1),
+    persist: true,
+    staleTime: 300_000 // Fresh for 5 minutes
+  })
+
   const isAnyLoading = useLoadingStates()
   const { prefetch } = usePrefetch()
 
-  useEffect(() => {
-    // Load initial data
-    query(() => api.getFeatureData(1), {
-      persist: true,
-      staleTime: 300_000 // Fresh for 5 minutes
-    })
-
-    // Prefetch next feature data
+  // Prefetch next feature data on hover
+  const handlePrefetchNext = () => {
     prefetch('featureData-2', () => api.getFeatureData(2), {
       staleTime: 300_000
     })
-  }, [query, prefetch])
+  }
 
   // This component's state is completely isolated from other stores
   // You can reset just this feature's state without affecting global state
@@ -68,6 +68,7 @@ export default function FeatureModule() {
       )}
 
       <button onClick={handleReset}>Reset Feature State</button>
+      <button onMouseEnter={handlePrefetchNext}>Prefetch Next Feature</button>
 
       <small style={{ display: 'block', marginTop: 10, color: '#666' }}>
         This module uses its own isolated store. Resetting here won't affect the main app state.

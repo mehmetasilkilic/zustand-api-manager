@@ -17,11 +17,11 @@ const { data, isLoading, error, refetch } = useQuery({
 
 **Zustand API Manager:**
 ```typescript
-const { data, isLoading, error, query } = useApiQuery<User>(`user-${userId}`)
-
-useEffect(() => {
-  query(() => fetchUser(userId), { staleTime: 60_000 })
-}, [userId, query])
+// Declarative mode — closest to React Query's API
+const { data, isLoading, error } = useApiQuery<User>('user', {
+  queryFn: () => fetchUser(userId),
+  staleTime: 60_000
+})
 ```
 
 ### Mutation Hook
@@ -57,9 +57,28 @@ queryClient.invalidateQueries({ queryKey: ['users'] })
 
 **Zustand API Manager:**
 ```typescript
-useApiStore.getState().invalidate()('users')
+useApiStore.getState().invalidateApi('users')
 // or batch:
-useApiStore.getState().invalidate()s(['users', 'posts'])
+useApiStore.getState().invalidateApis(['users', 'posts'])
+```
+
+### Observer Pattern
+
+**React Query:**
+```typescript
+// Multiple components using same queryKey auto-share data
+const { data } = useQuery({ queryKey: ['user'] })
+```
+
+**Zustand API Manager:**
+```typescript
+// Component A: owns the fetch (declarative mode)
+const { data } = useApiQuery<User>('user', {
+  queryFn: () => fetchUser(1)
+})
+
+// Component B: reads the same data (observer mode)
+const { data } = useApiQuery<User>('user')
 ```
 
 ---
@@ -79,14 +98,11 @@ const { data, error, isLoading, mutate } = useSWR(
 
 **Zustand API Manager:**
 ```typescript
-const { data, error, isLoading, query, invalidate() } = useApiQuery<User>('user')
-
-useEffect(() => {
-  query(() => api.getUser(), {
-    revalidateOnStale: true,
-    staleTime: 30_000
-  })
-}, [query])
+const { data, error, isLoading, invalidate } = useApiQuery<User>('user', {
+  queryFn: () => api.getUser(),
+  revalidateOnStale: true,
+  staleTime: 30_000
+})
 ```
 
 ### Mutation
@@ -138,9 +154,8 @@ const useApi = createApiComposer<MyApi>({
   }
 })
 
-// In component:
-const { data, query } = useApi('getUser')
-query({ id: 1 })
+// Declarative mode in component:
+const { data } = useApi('getUser', { params: { id: 1 } })
 ```
 
 ---
@@ -154,22 +169,22 @@ query({ id: 1 })
 3. **Zustand Integration**: Works with existing Zustand stores
 4. **Better TypeScript**: Strong inference out of the box
 5. **Store Isolation**: Easy multi-store setup
+6. **Declarative + Imperative**: Choose the right mode per use case
 
 ### Considerations
 
-1. **No Automatic Refetch**: No automatic background refetching (use `usePolling` or `revalidateOnStale`)
+1. **No Automatic Refetch on Focus**: Use `usePolling` or `revalidateOnStale` instead
 2. **Manual Query Keys**: You define your own key structure
-3. **No Query Observers**: No automatic query watching (by design)
+3. **Observer Mode is Explicit**: Use `useApiQuery(key)` without options to read without fetching
 
 ---
 
 ## Migration Checklist
 
 - [ ] Install `zustand-api-manager zustand immer`
-- [ ] Replace `useQuery` with `useApiQuery`
+- [ ] Replace `useQuery` with `useApiQuery` (use declarative mode with `queryFn`)
 - [ ] Replace `useMutation` with `useApiMutation`
-- [ ] Update cache invalidation calls
-- [ ] Add `useEffect` for queries (if needed)
+- [ ] Update cache invalidation calls (`invalidateApi`, `invalidateApis`)
 - [ ] Migrate optimistic updates
 - [ ] Set up global config (if needed)
 - [ ] Update error handling
@@ -182,9 +197,11 @@ query({ id: 1 })
 
 1. **Migrate Incrementally**: Start with one feature at a time
 2. **Keep Keys Consistent**: Use similar key naming to your old setup
-3. **Test Thoroughly**: Especially cache behavior and error states
-4. **Use DevTools**: Enable devtools during migration
-5. **Document Changes**: Note any behavioral differences
+3. **Prefer Declarative Mode**: Use `queryFn` for most queries to avoid `useEffect` boilerplate
+4. **Use Observer Mode**: For components that only read data fetched elsewhere
+5. **Test Thoroughly**: Especially cache behavior and error states
+6. **Use DevTools**: Enable devtools during migration
+7. **Document Changes**: Note any behavioral differences
 
 ---
 

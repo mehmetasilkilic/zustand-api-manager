@@ -19,7 +19,8 @@ import type {
   ApiComposerConfig,
   ApiStoreConfig,
   ApiQueryResult,
-  ApiMutationResult
+  ApiMutationResult,
+  UseApiQueryOptions
 } from './types'
 
 /**
@@ -49,7 +50,8 @@ export function createApiStore(config?: ApiStoreConfig) {
   const { useStore } = createStoreInternal(config)
   return {
     useStore,
-    useApiQuery: <T>(key: string): ApiQueryResult<T> => useApiQueryFn<T>(key, useStore),
+    useApiQuery: <T>(key: string, options?: UseApiQueryOptions<T>): ApiQueryResult<T> =>
+      useApiQueryFn<T>(key, options, useStore),
     useLoadingStates: (keys?: string | string[]): boolean => useLoadingStatesFn(keys, useStore),
     usePolling: <T>(
       key: string,

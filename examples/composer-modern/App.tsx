@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import { createApiComposer, ApiQueryEndpoint, ApiMutationEndpoint } from 'zustand-api-manager'
 
 // ====================
@@ -100,13 +100,11 @@ const useApi = createApiComposer<MyApi>({
 // ====================
 
 function UserProfile({ userId }: { userId: number }) {
-  const { data, isLoading, isError, error, query, invalidate } = useApi('getUser')
-
-  useEffect(() => {
-    query({ id: userId }, {
-      staleTime: 60_000 // Cache for 1 minute
-    })
-  }, [userId, query])
+  // Declarative mode — auto-fetches when params change
+  const { data, isLoading, isError, error, invalidate } = useApi('getUser', {
+    params: { id: userId },
+    staleTime: 60_000 // Cache for 1 minute
+  })
 
   if (isLoading) return <div>Loading user...</div>
   if (isError) return <div>Error: {error?.message}</div>
@@ -121,7 +119,7 @@ function UserProfile({ userId }: { userId: number }) {
         marginBottom: '16px'
       }}
     >
-      <h3>User Profile (Query Endpoint)</h3>
+      <h3>User Profile (Declarative Query)</h3>
       <p>
         <strong>ID:</strong> {data.id}
       </p>
@@ -137,11 +135,8 @@ function UserProfile({ userId }: { userId: number }) {
 }
 
 function UserList() {
-  const { data, isLoading, query } = useApi('listUsers')
-
-  useEffect(() => {
-    query()
-  }, [query])
+  // Declarative mode — void params, auto-fetches on mount
+  const { data, isLoading } = useApi('listUsers', {})
 
   if (isLoading) return <div>Loading users...</div>
 
@@ -154,7 +149,7 @@ function UserList() {
         marginBottom: '16px'
       }}
     >
-      <h3>User List (Query Endpoint)</h3>
+      <h3>User List (Declarative Query)</h3>
       <ul>
         {data?.map(user => (
           <li key={user.id}>
@@ -347,12 +342,12 @@ export default function App() {
       <h1>Modern API Composer Example</h1>
       <p>
         This example demonstrates using <code>createApiComposer</code> with both query and mutation
-        endpoints.
+        endpoints. Queries use declarative auto-fetching with <code>params</code>.
       </p>
 
       <hr style={{ margin: '24px 0' }} />
 
-      <h2>Queries (Read Operations)</h2>
+      <h2>Queries (Declarative Auto-Fetch)</h2>
       <UserProfile userId={1} />
       <UserList />
 
@@ -369,18 +364,21 @@ export default function App() {
         <h3>Key Differences:</h3>
         <ul>
           <li>
+            <strong>Declarative queries</strong> auto-fetch when <code>params</code> is provided as
+            second argument
+          </li>
+          <li>
+            <strong>Observer mode</strong> reads state without fetching when no second arg is given
+          </li>
+          <li>
             <strong>Query endpoints</strong> use <code>ApiQueryEndpoint</code> and return{' '}
-            <code>query</code>,<code>reset</code>, <code>invalidate</code>, and{' '}
+            <code>query</code>, <code>reset</code>, <code>invalidate</code>, and{' '}
             <code>fetchedAt</code>
           </li>
           <li>
             <strong>Mutation endpoints</strong> use <code>ApiMutationEndpoint</code> and return{' '}
             <code>mutate</code>
             and <code>reset</code> (no invalidate or fetchedAt)
-          </li>
-          <li>
-            Both query and mutation functions are bound at composer creation time via the{' '}
-            <code>queries</code> and <code>mutations</code> config
           </li>
         </ul>
       </div>

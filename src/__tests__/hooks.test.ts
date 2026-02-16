@@ -425,3 +425,191 @@ describe('createApiStore — bound hooks with renderHook', () => {
     vi.useRealTimers()
   })
 })
+
+// ── useApiQuery — declarative auto-fetch mode ────────────────
+
+describe('useApiQuery — declarative mode', () => {
+  it('auto-fetches on mount when queryFn is provided', async () => {
+    const queryFn = vi.fn(() => Promise.resolve({ data: 'hello' }))
+
+    const { result } = renderHook(() =>
+      useApiQuery<string>('decl-auto', { queryFn })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(queryFn).toHaveBeenCalledTimes(1)
+    expect(result.current.data).toBe('hello')
+  })
+
+  it('does NOT auto-fetch without queryFn (observer mode)', async () => {
+    const { result } = renderHook(() => useApiQuery<string>('decl-observer'))
+
+    // Should stay idle — no fetch triggered
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.data).toBeNull()
+  })
+
+  it('observer reads data fetched by another call to same key', async () => {
+    const queryFn = vi.fn(() => Promise.resolve({ data: 'shared' }))
+
+    // Declarative hook fetches
+    const { result: fetcher } = renderHook(() =>
+      useApiQuery<string>('decl-shared', { queryFn })
+    )
+
+    await waitFor(() => {
+      expect(fetcher.current.isSuccess).toBe(true)
+    })
+
+    // Observer hook reads the same key
+    const { result: observer } = renderHook(() =>
+      useApiQuery<string>('decl-shared')
+    )
+
+    expect(observer.current.data).toBe('shared')
+    expect(observer.current.isSuccess).toBe(true)
+  })
+
+  it('respects enabled: false (no fetch until true)', async () => {
+    const queryFn = vi.fn(() => Promise.resolve({ data: 'enabled' }))
+
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useApiQuery<string>('decl-enabled', { queryFn, enabled }),
+      { initialProps: { enabled: false } }
+    )
+
+    // Should not have fetched
+    expect(queryFn).not.toHaveBeenCalled()
+    expect(result.current.isIdle).toBe(true)
+
+    // Enable
+    rerender({ enabled: true })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(queryFn).toHaveBeenCalledTimes(1)
+    expect(result.current.data).toBe('enabled')
+  })
+
+  it('refetches when key changes', async () => {
+    const queryFn = vi.fn((key: string) =>
+      Promise.resolve({ data: `data-for-${key}` })
+    )
+
+    const { result, rerender } = renderHook(
+      ({ key }: { key: string }) =>
+        useApiQuery<string>(key, { queryFn: () => queryFn(key) }),
+      { initialProps: { key: 'key-a' } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(result.current.data).toBe('data-for-key-a')
+
+    rerender({ key: 'key-b' })
+
+    await waitFor(() => {
+      expect(result.current.data).toBe('data-for-key-b')
+    })
+
+    expect(queryFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses latest queryFn via ref (no stale closures)', async () => {
+    let version = 'v1'
+
+    const { result, rerender } = renderHook(
+      ({ v }: { v: string }) =>
+        useApiQuery<string>('decl-ref', {
+          queryFn: () => Promise.resolve({ data: v })
+        }),
+      { initialProps: { v: 'v1' } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.data).toBe('v1')
+    })
+
+    // Change queryFn but keep same key — the ref should hold the latest fn
+    version = 'v2'
+    rerender({ v: 'v2' })
+
+    // Imperatively call query with the latest fn to verify ref works
+    await act(async () => {
+      await result.current.query(() => Promise.resolve({ data: version }))
+    })
+
+    expect(result.current.data).toBe('v2')
+  })
+
+  it('forwards staleTime to handleApi', async () => {
+    let callCount = 0
+    const queryFn = vi.fn(() => {
+      callCount++
+      return Promise.resolve({ data: `call-${callCount}` })
+    })
+
+    const { result, rerender } = renderHook(
+      ({ key }: { key: string }) =>
+        useApiQuery<string>(key, { queryFn, staleTime: 60_000 }),
+      { initialProps: { key: 'stale-test' } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(1)
+
+    // Rerender with same key — staleTime should prevent refetch
+    rerender({ key: 'stale-test' })
+
+    // Still only one call
+    expect(queryFn).toHaveBeenCalledTimes(1)
+    expect(result.current.data).toBe('call-1')
+  })
+
+  it('imperative query() still works alongside declarative', async () => {
+    const queryFn = vi.fn(() => Promise.resolve({ data: 'auto' }))
+
+    const { result } = renderHook(() =>
+      useApiQuery<string>('decl-imperative', { queryFn })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(result.current.data).toBe('auto')
+
+    // Now call imperatively with different data
+    await act(async () => {
+      await result.current.query(() => Promise.resolve({ data: 'manual' }))
+    })
+
+    expect(result.current.data).toBe('manual')
+  })
+
+  it('bound useApiQuery with declarative mode works via createApiStore', async () => {
+    const store = createApiStore({ storageKey: 'bound-decl-test' })
+    const queryFn = vi.fn(() => Promise.resolve({ data: 'bound-decl' }))
+
+    const { result } = renderHook(() =>
+      store.useApiQuery<string>('test-bound', { queryFn })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.data).toBe('bound-decl')
+
+    // Should not appear in the default store
+    expect(useApiStore.getState().apiStates['test-bound']).toBeUndefined()
+  })
+})

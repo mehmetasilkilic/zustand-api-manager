@@ -469,11 +469,6 @@ export interface ApiQueryResult<T> {
 }
 
 /**
- * @deprecated Use {@link ApiQueryResult} instead. Will be removed in a future version.
- */
-export type ApiHandlerResult<T> = ApiQueryResult<T>
-
-/**
  * The return type of {@link useApiMutation}.
  * Provides reactive access to mutation state with a `mutate` function optimized for write operations.
  *
@@ -602,3 +597,31 @@ export type ApiComposerReturn<TApiStructure, K extends keyof TApiStructure> =
     : TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
       ? ApiComposerMutationResult<R, V>
       : never
+
+/**
+ * Options for declarative auto-fetching mode in {@link useApiQuery}.
+ * When `queryFn` is provided, the hook will automatically trigger a fetch on mount
+ * and when `key` or `enabled` changes.
+ *
+ * @typeParam T - The expected response data type.
+ */
+export interface UseApiQueryOptions<T = unknown> extends ApiCallOptions<T> {
+  /** The function to call for fetching data. When provided, enables declarative auto-fetch mode. */
+  queryFn?: () => Promise<{ data: T }>
+  /** If `false`, the auto-fetch is paused. Defaults to `true`. */
+  enabled?: boolean
+}
+
+/**
+ * Conditional options type for declarative auto-fetching in the composer.
+ * Only applies to query endpoints. Mutation endpoints resolve to `never`.
+ *
+ * @typeParam TApiStructure - The API structure interface.
+ * @typeParam K - The endpoint key.
+ */
+export type ComposerDeclarativeOptions<TApiStructure, K extends keyof TApiStructure> =
+  TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
+    ? P extends void
+      ? { enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
+      : { params: P; enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
+    : never

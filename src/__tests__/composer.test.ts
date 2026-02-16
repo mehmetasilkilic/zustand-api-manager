@@ -2,18 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
 import { createApiComposer } from '../composer'
-import { ApiQueryEndpoint, ApiMutationEndpoint, FetchStatus } from '../types'
-
-// ====================
-// Unbound backward-compat tests (no queries config)
-// ====================
-
-interface TestApi {
-  getUsers: ApiQueryEndpoint<void, { id: number; name: string }[]>
-  getPost: ApiQueryEndpoint<{ id: number }, { title: string }>
-}
-
-const useApi = createApiComposer<TestApi>()
+import { ApiQueryEndpoint, ApiMutationEndpoint } from '../types'
 
 beforeEach(() => {
   useApiStore.setState({
@@ -21,163 +10,6 @@ beforeEach(() => {
     persistentKeys: {},
     middleware: [],
     errorHandlers: []
-  })
-})
-
-describe('createApiComposer', () => {
-  it('returns idle state for a fresh key', () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-    expect(result.current.isIdle).toBe(true)
-    expect(result.current.isLoading).toBe(false)
-    expect(result.current.isSuccess).toBe(false)
-    expect(result.current.isError).toBe(false)
-    expect(result.current.data).toBeNull()
-    expect(result.current.error).toBeNull()
-    expect(result.current.status).toBe(FetchStatus.IDLE)
-    expect(result.current.fetchedAt).toBeNull()
-  })
-
-  it('query triggers loading then success with typed data (void params, unbound)', async () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-
-    await act(async () => {
-      // Unbound fallback: pass apiCall directly (runtime-only backward compat)
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
-        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
-      )
-    })
-
-    expect(result.current.isSuccess).toBe(true)
-    expect(result.current.data).toEqual([{ id: 1, name: 'Alice' }])
-    expect(result.current.status).toBe(FetchStatus.SUCCESS)
-    expect(result.current.fetchedAt).not.toBeNull()
-  })
-
-  it('query triggers error state (unbound)', async () => {
-    const { result } = renderHook(() => useApi('getPost'))
-
-    await act(async () => {
-      // Unbound fallback: pass params + apiCall directly
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
-        { id: 1 },
-        () => Promise.reject(new Error('not found'))
-      )
-    })
-
-    expect(result.current.isError).toBe(true)
-    expect(result.current.error!.message).toBe('not found')
-    expect(result.current.data).toBeNull()
-    expect(result.current.status).toBe(FetchStatus.ERROR)
-  })
-
-  it('reflects external state changes', () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-    expect(result.current.isIdle).toBe(true)
-
-    act(() => {
-      useApiStore
-        .getState()
-        .setApiState('getUsers', { status: FetchStatus.SUCCESS, data: [{ id: 2, name: 'Bob' }] })
-    })
-
-    expect(result.current.isSuccess).toBe(true)
-    expect(result.current.data).toEqual([{ id: 2, name: 'Bob' }])
-  })
-
-  it('reset clears state back to idle', async () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-
-    await act(async () => {
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
-        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
-      )
-    })
-    expect(result.current.isSuccess).toBe(true)
-
-    act(() => {
-      result.current.reset()
-    })
-    expect(result.current.isIdle).toBe(true)
-    expect(result.current.data).toBeNull()
-    expect(result.current.status).toBe(FetchStatus.IDLE)
-  })
-})
-
-describe('createApiComposer — params passthrough', () => {
-  it('passes params to the apiCall function for non-void endpoints (unbound)', async () => {
-    const { result } = renderHook(() => useApi('getPost'))
-    const apiCall = vi.fn((params: { id: number }) =>
-      Promise.resolve({ data: { title: `Post ${params.id}` } })
-    )
-
-    await act(async () => {
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)({ id: 42 }, apiCall)
-    })
-
-    expect(apiCall).toHaveBeenCalledWith({ id: 42 })
-    expect(result.current.isSuccess).toBe(true)
-    expect(result.current.data).toEqual({ title: 'Post 42' })
-  })
-
-  it('passes undefined params for void endpoints (unbound)', async () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-    const apiCall = vi.fn((_params: void) => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
-
-    await act(async () => {
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(apiCall)
-    })
-
-    expect(apiCall).toHaveBeenCalledWith(undefined)
-    expect(result.current.isSuccess).toBe(true)
-  })
-})
-
-describe('createApiComposer — invalidate', () => {
-  it('clears fetchedAt while preserving data', async () => {
-    const { result } = renderHook(() => useApi('getUsers'))
-
-    await act(async () => {
-      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
-        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
-      )
-    })
-    expect(result.current.fetchedAt).not.toBeNull()
-    expect(result.current.isSuccess).toBe(true)
-
-    act(() => {
-      result.current.invalidate()
-    })
-    expect(result.current.fetchedAt).toBeNull()
-    expect(result.current.data).toEqual([{ id: 1, name: 'Alice' }])
-    expect(result.current.isSuccess).toBe(true)
-  })
-})
-
-describe('createApiComposer — stable references', () => {
-  it('query, reset, and invalidate are stable across re-renders', async () => {
-    const { result, rerender } = renderHook(() => useApi('getUsers'))
-
-    const firstQuery = result.current.query
-    const firstReset = result.current.reset
-    const firstInvalidate = result.current.invalidate
-
-    // Trigger a state change
-    act(() => {
-      useApiStore.getState().setApiState('getUsers', { status: FetchStatus.LOADING })
-    })
-
-    expect(result.current.isLoading).toBe(true)
-
-    // Function references should be the same
-    expect(result.current.query).toBe(firstQuery)
-    expect(result.current.reset).toBe(firstReset)
-    expect(result.current.invalidate).toBe(firstInvalidate)
-
-    // Also stable after a plain rerender
-    rerender()
-    expect(result.current.query).toBe(firstQuery)
-    expect(result.current.reset).toBe(firstReset)
-    expect(result.current.invalidate).toBe(firstInvalidate)
   })
 })
 
@@ -524,5 +356,189 @@ describe('createApiComposer — robustness', () => {
     expect((mutationResult.current as any).query).toBeUndefined()
     expect((mutationResult.current as any).invalidate).toBeUndefined()
     expect((mutationResult.current as any).fetchedAt).toBeUndefined()
+  })
+})
+
+// ====================
+// Declarative auto-fetch mode tests
+// ====================
+
+describe('createApiComposer — declarative mode', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('auto-fetches with bound query when params provided', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      }
+    })
+
+    const { result } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 5 } })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(mockApi.getUser).toHaveBeenCalledWith({ id: 5 })
+    expect(result.current.data).toEqual({
+      id: 5,
+      name: 'John Doe',
+      email: 'john@example.com'
+    })
+  })
+
+  it('auto-fetches void-param endpoint with empty options', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: mockApi.listUsers
+      }
+    })
+
+    const { result } = renderHook(() =>
+      useModernApi('listUsers', {})
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(mockApi.listUsers).toHaveBeenCalledTimes(1)
+    expect(result.current.data).toHaveLength(2)
+  })
+
+  it('observer mode when no second arg', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    const { result } = renderHook(() => useModernApi('getUser'))
+
+    // Should stay idle — no auto-fetch
+    expect(result.current.isIdle).toBe(true)
+    expect(result.current.data).toBeNull()
+    expect(mockApi.getUser).not.toHaveBeenCalled()
+  })
+
+  it('refetches when params change', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number }) =>
+        useModernApi('getUser', { params: { id } }),
+      { initialProps: { id: 1 } }
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(mockApi.getUser).toHaveBeenCalledWith({ id: 1 })
+
+    rerender({ id: 2 })
+
+    await waitFor(() => {
+      expect(mockApi.getUser).toHaveBeenCalledWith({ id: 2 })
+    })
+    expect(mockApi.getUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('does NOT refetch when params are deeply equal', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    const { rerender } = renderHook(
+      ({ id }: { id: number }) =>
+        useModernApi('getUser', { params: { id } }),
+      { initialProps: { id: 1 } }
+    )
+
+    await waitFor(() => {
+      expect(mockApi.getUser).toHaveBeenCalledTimes(1)
+    })
+
+    // Rerender with same id value (new object reference, same serialized value)
+    rerender({ id: 1 })
+
+    // Should NOT have triggered a second fetch
+    expect(mockApi.getUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('respects enabled: false', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useModernApi('getUser', { params: { id: 1 }, enabled }),
+      { initialProps: { enabled: false } }
+    )
+
+    expect(result.current.isIdle).toBe(true)
+    expect(mockApi.getUser).not.toHaveBeenCalled()
+
+    // Enable
+    rerender({ enabled: true })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(mockApi.getUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('imperative query() still works alongside declarative', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    const { result } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 1 } })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    // Now call imperatively with different params
+    await act(async () => {
+      await result.current.query({ id: 99 })
+    })
+
+    expect(mockApi.getUser).toHaveBeenCalledWith({ id: 99 })
+  })
+
+  it('mutations ignore second arg (no auto-fetch)', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
+
+    // Even if somehow a second arg is passed at runtime, mutations should not auto-fetch
+    const { result } = renderHook(() =>
+      (useModernApi as any)('createUser', { name: 'test', email: 'test@test.com' })
+    )
+
+    expect(result.current.isIdle).toBe(true)
+    expect(mockApi.createUser).not.toHaveBeenCalled()
   })
 })

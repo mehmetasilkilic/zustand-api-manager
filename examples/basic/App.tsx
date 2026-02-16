@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import { useApiQuery } from 'zustand-api-manager'
 
 interface User {
@@ -17,18 +17,16 @@ const api = {
 }
 
 export default function App() {
-  const { data, isLoading, isError, error, query, reset } = useApiQuery<User>('user')
-
-  useEffect(() => {
-    query(() => api.getUser(1), {
-      persist: true, // Cache in localStorage
-      staleTime: 60_000, // Fresh for 1 minute
-      retry: 2, // Retry twice on failure
-      onSuccess: user => {
-        console.log('User loaded:', user.name)
-      }
-    })
-  }, [query])
+  // Declarative mode — auto-fetches on mount
+  const { data, isLoading, isError, error, reset } = useApiQuery<User>('user', {
+    queryFn: () => api.getUser(1),
+    persist: true, // Cache in localStorage
+    staleTime: 60_000, // Fresh for 1 minute
+    retry: 2, // Retry twice on failure
+    onSuccess: user => {
+      console.log('User loaded:', user.name)
+    }
+  })
 
   if (isLoading) return <div>Loading...</div>
   if (isError) return <div>Error: {error?.message}</div>

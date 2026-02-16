@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
 import {
   ApiCallOptions,
@@ -6,6 +6,7 @@ import {
   ApiComposerReturn,
   ApiState,
   ApiStore,
+  ComposerDeclarativeOptions,
   FetchStatus
 } from './types'
 import { isApiCallOptions } from './utils'
@@ -19,8 +20,7 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * hook automatically infers parameter and response types for each endpoint.
  *
  * For queries, bind the query function in the `queries` config and call `query(params, options?)`
- * or `query(options?)` for void-param endpoints. An unbound fallback is available for backward
- * compatibility when no query function is provided.
+ * or `query(options?)` for void-param endpoints.
  *
  * For mutations, bind the mutation function in the `mutations` config and call `mutate(variables, options?)`.
  *
@@ -75,7 +75,8 @@ export function createApiComposer<TApiStructure>(
   config?: ApiComposerConfig<TApiStructure> & { store?: UseBoundStore<StoreApi<ApiStore>> }
 ) {
   return function useApiComposer<K extends keyof TApiStructure>(
-    key: K
+    key: K,
+    declarativeOptions?: ComposerDeclarativeOptions<TApiStructure, K>
   ): ApiComposerReturn<TApiStructure, K> {
     const useStore = config?.store ?? useApiStore
 
@@ -99,6 +100,20 @@ export function createApiComposer<TApiStructure>(
 
     const queryFnRef = useRef(queryFn)
     queryFnRef.current = queryFn
+
+    // Declarative mode detection: second arg provided AND this is a query endpoint (not mutation)
+    const isDeclarativeMode = declarativeOptions != null && !mutationFn
+    const declParams = isDeclarativeMode
+      ? (declarativeOptions as { params?: unknown }).params
+      : undefined
+    const serializedParams = isDeclarativeMode ? JSON.stringify(declParams) : ''
+    const enabled = isDeclarativeMode
+      ? (declarativeOptions as { enabled?: boolean }).enabled !== false
+      : false
+
+    // Keep declarative options in ref so the effect uses latest without restarting
+    const declarativeOptionsRef = useRef(declarativeOptions)
+    declarativeOptionsRef.current = declarativeOptions
 
     // Common state accessors
     const commonState = {
@@ -147,37 +162,24 @@ export function createApiComposer<TApiStructure>(
       } as ApiComposerReturn<TApiStructure, K>
     }
 
-    // This is a query endpoint
+    // This is a query endpoint — requires a bound query function
     const query = useCallback(
       (...args: unknown[]) => {
         let params: unknown
-        let apiCall: (params: unknown) => Promise<{ data: unknown }>
         let options: ApiCallOptions<unknown> | undefined
 
-        if (queryFnRef.current) {
-          // Bound query path: query(params, options?) or query(options?) for void params
-          if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
-            params = undefined
-            options = args[0] as ApiCallOptions<unknown> | undefined
-          } else {
-            params = args[0]
-            options = args[1] as ApiCallOptions<unknown> | undefined
-          }
-          apiCall = queryFnRef.current
+        // query(params, options?) or query(options?) for void params
+        if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
+          params = undefined
+          options = args[0] as ApiCallOptions<unknown> | undefined
         } else {
-          // Unbound fallback: query(apiCall, options?) or query(params, apiCall, options?)
-          if (typeof args[0] === 'function') {
-            apiCall = args[0] as (params: unknown) => Promise<{ data: unknown }>
-            options = args[1] as ApiCallOptions<unknown> | undefined
-            params = undefined
-          } else {
-            params = args[0]
-            apiCall = args[1] as (params: unknown) => Promise<{ data: unknown }>
-            options = args[2] as ApiCallOptions<unknown> | undefined
-          }
+          params = args[0]
+          options = args[1] as ApiCallOptions<unknown> | undefined
         }
 
-        return useStore.getState().handleApi(key as string, () => apiCall(params), options)
+        return useStore
+          .getState()
+          .handleApi(key as string, () => queryFnRef.current!(params), options)
       },
       [key, useStore]
     )
@@ -191,6 +193,27 @@ export function createApiComposer<TApiStructure>(
       () => useStore.getState().invalidateApi(key as string),
       [key, useStore]
     )
+
+    // Declarative auto-fetch effect for query endpoints
+    useEffect(() => {
+      if (!isDeclarativeMode || !enabled || !queryFnRef.current) return
+
+      const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+      const apiOptions: ApiCallOptions<unknown> = {}
+      if (opts) {
+        // Forward ApiCallOptions keys, excluding declarative-only keys
+        for (const k of Object.keys(opts)) {
+          if (k !== 'params' && k !== 'enabled' && k !== 'signal' && k !== 'optimisticData') {
+            ;(apiOptions as Record<string, unknown>)[k] = opts[k]
+          }
+        }
+      }
+
+      const params = declParams
+      useStore
+        .getState()
+        .handleApi(key as string, () => queryFnRef.current!(params), apiOptions)
+    }, [key, serializedParams, enabled, isDeclarativeMode, useStore])
 
     return {
       ...commonState,

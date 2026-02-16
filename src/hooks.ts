@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
-import { ApiCallOptions, ApiQueryResult, ApiMutationResult, ApiStore, FetchStatus } from './types'
+import {
+  ApiCallOptions,
+  ApiQueryResult,
+  ApiMutationResult,
+  ApiStore,
+  FetchStatus,
+  UseApiQueryOptions
+} from './types'
 import { isApiCallOptions } from './utils'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
@@ -43,38 +50,49 @@ export const useLoadingStates = (
  * Provides reactive access to query state along with functions to trigger,
  * reset, and invalidate the query.
  *
+ * Supports two modes:
+ * - **Observer mode** (no `queryFn`): Reads state written by another component. No auto-fetch.
+ * - **Declarative mode** (`queryFn` provided): Automatically fetches on mount and when `key`/`enabled` changes.
+ *
  * The returned `query`, `reset`, and `invalidate` functions are
  * referentially stable (wrapped in `useCallback`), so they are safe to use
  * in `useEffect` dependency arrays and memoized children.
  *
  * @typeParam T - The expected response data type.
  * @param key - The unique identifier for the API endpoint.
- * @param store - Optional custom store instance (defaults to the singleton `useApiStore`).
+ * @param optionsOrStore - Either a custom store instance (observer mode) or options with `queryFn` (declarative mode).
  * @returns An {@link ApiQueryResult} containing the current state (`data`, `error`, status booleans),
  *          a `query` function to trigger the call, and a `reset` function to clear the state.
  *
  * @example
  * ```tsx
- * interface User { id: number; name: string }
+ * // Declarative mode — auto-fetches on mount
+ * const { data, isLoading } = useApiQuery<User>('getUser', {
+ *   queryFn: () => fetch('/api/user').then(r => r.json()),
+ *   staleTime: 30_000
+ * })
  *
- * function UserProfile() {
- *   const { data, isLoading, isError, error, query, reset } = useApiQuery<User>('getUser')
- *
- *   useEffect(() => {
- *     query(() => fetch('/api/user').then(r => r.json()))
- *   }, [query])
- *
- *   if (isLoading) return <Spinner />
- *   if (isError) return <Error message={error?.message} />
- *   return <div>{data?.name}</div>
- * }
+ * // Observer mode — reads data fetched elsewhere
+ * const { data } = useApiQuery<User>('getUser')
  * ```
  */
-export const useApiQuery = <T>(
+export function useApiQuery<T>(
   key: string,
-  store?: UseBoundStore<StoreApi<ApiStore>>
-): ApiQueryResult<T> => {
-  const useStore = store ?? useApiStore
+  options?: UseApiQueryOptions<T>,
+  storeOverride?: UseBoundStore<StoreApi<ApiStore>>
+): ApiQueryResult<T> {
+  const useStore = storeOverride ?? useApiStore
+
+  const queryFn = options?.queryFn
+  const enabled = options?.enabled !== false
+
+  // Keep queryFn and options in refs so the effect always uses the latest
+  // without restarting.
+  const queryFnRef = useRef(queryFn)
+  queryFnRef.current = queryFn
+
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
   // Only subscribe reactively to the slice that actually changes.
   // Store methods are stable references defined once in create(),
@@ -82,14 +100,28 @@ export const useApiQuery = <T>(
   const apiState = useStore(state => state.apiStates[key])
 
   const query = useCallback(
-    (apiCall: () => Promise<{ data: T }>, options?: ApiCallOptions<T>) =>
-      useStore.getState().handleApi<T>(key, apiCall, options),
+    (apiCall: () => Promise<{ data: T }>, callOptions?: ApiCallOptions<T>) =>
+      useStore.getState().handleApi<T>(key, apiCall, callOptions),
     [key, useStore]
   )
 
   const reset = useCallback(() => useStore.getState().resetApiState(key), [key, useStore])
 
   const invalidate = useCallback(() => useStore.getState().invalidateApi(key), [key, useStore])
+
+  // Declarative auto-fetch effect
+  useEffect(() => {
+    if (!queryFnRef.current || !enabled) return
+
+    const opts = optionsRef.current
+    const apiOptions: ApiCallOptions<T> = {
+      ...opts,
+      queryFn: undefined,
+      enabled: undefined
+    } as ApiCallOptions<T>
+
+    useStore.getState().handleApi(key, () => queryFnRef.current!(), apiOptions)
+  }, [key, enabled, useStore])
 
   return {
     status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
@@ -149,7 +181,7 @@ export const usePolling = <T>(
   store?: UseBoundStore<StoreApi<ApiStore>>
 ): ApiQueryResult<T> => {
   const useStore = store ?? useApiStore
-  const handler = useApiQuery<T>(key, useStore)
+  const handler = useApiQuery<T>(key, undefined, useStore)
 
   // Keep apiCall and options fresh without restarting the polling interval.
   const apiCallRef = useRef(apiCall)
