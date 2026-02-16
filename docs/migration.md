@@ -132,11 +132,15 @@ interface MyApi {
   getUser: ApiQueryEndpoint<{ id: number }, User>
 }
 
-const useApi = createApiComposer<MyApi>()
+const useApi = createApiComposer<MyApi>({
+  queries: {
+    getUser: (params) => fetchUser(params.id)
+  }
+})
 
 // In component:
 const { data, query } = useApi('getUser')
-query({ id: 1 }, (params) => fetchUser(params.id))
+query({ id: 1 })
 ```
 
 ---

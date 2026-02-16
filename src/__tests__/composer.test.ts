@@ -4,6 +4,10 @@ import { useApiStore } from '../store'
 import { createApiComposer } from '../composer'
 import { ApiQueryEndpoint, ApiMutationEndpoint, FetchStatus } from '../types'
 
+// ====================
+// Unbound backward-compat tests (no queries config)
+// ====================
+
 interface TestApi {
   getUsers: ApiQueryEndpoint<void, { id: number; name: string }[]>
   getPost: ApiQueryEndpoint<{ id: number }, { title: string }>
@@ -33,11 +37,14 @@ describe('createApiComposer', () => {
     expect(result.current.fetchedAt).toBeNull()
   })
 
-  it('query triggers loading then success with typed data (void params)', async () => {
+  it('query triggers loading then success with typed data (void params, unbound)', async () => {
     const { result } = renderHook(() => useApi('getUsers'))
 
     await act(async () => {
-      await result.current.query(() => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
+      // Unbound fallback: pass apiCall directly (runtime-only backward compat)
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
+        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
+      )
     })
 
     expect(result.current.isSuccess).toBe(true)
@@ -46,11 +53,15 @@ describe('createApiComposer', () => {
     expect(result.current.fetchedAt).not.toBeNull()
   })
 
-  it('query triggers error state', async () => {
+  it('query triggers error state (unbound)', async () => {
     const { result } = renderHook(() => useApi('getPost'))
 
     await act(async () => {
-      await result.current.query({ id: 1 }, () => Promise.reject(new Error('not found')))
+      // Unbound fallback: pass params + apiCall directly
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
+        { id: 1 },
+        () => Promise.reject(new Error('not found'))
+      )
     })
 
     expect(result.current.isError).toBe(true)
@@ -77,7 +88,9 @@ describe('createApiComposer', () => {
     const { result } = renderHook(() => useApi('getUsers'))
 
     await act(async () => {
-      await result.current.query(() => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
+        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
+      )
     })
     expect(result.current.isSuccess).toBe(true)
 
@@ -91,14 +104,14 @@ describe('createApiComposer', () => {
 })
 
 describe('createApiComposer — params passthrough', () => {
-  it('passes params to the apiCall function for non-void endpoints', async () => {
+  it('passes params to the apiCall function for non-void endpoints (unbound)', async () => {
     const { result } = renderHook(() => useApi('getPost'))
     const apiCall = vi.fn((params: { id: number }) =>
       Promise.resolve({ data: { title: `Post ${params.id}` } })
     )
 
     await act(async () => {
-      await result.current.query({ id: 42 }, apiCall)
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)({ id: 42 }, apiCall)
     })
 
     expect(apiCall).toHaveBeenCalledWith({ id: 42 })
@@ -106,12 +119,12 @@ describe('createApiComposer — params passthrough', () => {
     expect(result.current.data).toEqual({ title: 'Post 42' })
   })
 
-  it('passes undefined params for void endpoints', async () => {
+  it('passes undefined params for void endpoints (unbound)', async () => {
     const { result } = renderHook(() => useApi('getUsers'))
     const apiCall = vi.fn((_params: void) => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
 
     await act(async () => {
-      await result.current.query(apiCall)
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(apiCall)
     })
 
     expect(apiCall).toHaveBeenCalledWith(undefined)
@@ -124,7 +137,9 @@ describe('createApiComposer — invalidate', () => {
     const { result } = renderHook(() => useApi('getUsers'))
 
     await act(async () => {
-      await result.current.query(() => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] }))
+      await (result.current.query as (...args: unknown[]) => Promise<unknown>)(
+        () => Promise.resolve({ data: [{ id: 1, name: 'Alice' }] })
+      )
     })
     expect(result.current.fetchedAt).not.toBeNull()
     expect(result.current.isSuccess).toBe(true)
@@ -213,7 +228,15 @@ describe('createApiComposer — Query Endpoints (ApiQueryEndpoint)', () => {
   })
 
   it('query endpoint returns query, reset, and invalidate', async () => {
-    const useModernApi = createApiComposer<ModernApi>()
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      },
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
     const { result } = renderHook(() => useModernApi('getUser'))
 
     expect(result.current.query).toBeDefined()
@@ -223,12 +246,20 @@ describe('createApiComposer — Query Endpoints (ApiQueryEndpoint)', () => {
     expect((result.current as any).mutate).toBeUndefined()
   })
 
-  it('query endpoint with params works correctly', async () => {
-    const useModernApi = createApiComposer<ModernApi>()
+  it('query endpoint with params works correctly (bound)', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      },
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
     const { result } = renderHook(() => useModernApi('getUser'))
 
     await act(async () => {
-      await result.current.query({ id: 1 }, mockApi.getUser)
+      await result.current.query({ id: 1 })
     })
 
     await waitFor(() => {
@@ -243,12 +274,20 @@ describe('createApiComposer — Query Endpoints (ApiQueryEndpoint)', () => {
     expect(mockApi.getUser).toHaveBeenCalledWith({ id: 1 })
   })
 
-  it('query endpoint without params works correctly', async () => {
-    const useModernApi = createApiComposer<ModernApi>()
+  it('query endpoint without params works correctly (bound)', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      },
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
     const { result } = renderHook(() => useModernApi('listUsers'))
 
     await act(async () => {
-      await result.current.query(mockApi.listUsers)
+      await result.current.query()
     })
 
     await waitFor(() => {
@@ -388,16 +427,20 @@ describe('createApiComposer — Mixed Queries and Mutations', () => {
 
   it('supports both query and mutation endpoints in the same API', async () => {
     const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      },
       mutations: {
         createUser: mockApi.createUser,
         deleteUser: mockApi.deleteUser
       }
     })
 
-    // Test query
+    // Test query (bound)
     const { result: queryResult } = renderHook(() => useModernApi('getUser'))
     await act(async () => {
-      await queryResult.current.query({ id: 1 }, mockApi.getUser)
+      await queryResult.current.query({ id: 1 })
     })
 
     await waitFor(() => {
@@ -420,5 +463,66 @@ describe('createApiComposer — Mixed Queries and Mutations', () => {
     })
 
     expect(mutationResult.current.data?.name).toBe('New User')
+  })
+})
+
+describe('createApiComposer — robustness', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('mutation variables with onSuccess property are not misinterpreted as options', async () => {
+    interface SpecialApi {
+      updateSettings: ApiMutationEndpoint<{ onSuccess: boolean; value: number }, { ok: boolean }>
+    }
+
+    const mockUpdate = vi.fn((_vars: { onSuccess: boolean; value: number }) =>
+      Promise.resolve({ data: { ok: true } })
+    )
+
+    const useSpecialApi = createApiComposer<SpecialApi>({
+      mutations: {
+        updateSettings: mockUpdate
+      }
+    })
+
+    const { result } = renderHook(() => useSpecialApi('updateSettings'))
+
+    await act(async () => {
+      await result.current.mutate({ onSuccess: true, value: 42 })
+    })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    // The variables should have been passed correctly, not interpreted as options
+    expect(mockUpdate).toHaveBeenCalledWith({ onSuccess: true, value: 42 })
+  })
+
+  it('query endpoint has no mutate, mutation endpoint has no query/invalidate', () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      },
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
+
+    // Query endpoint
+    const { result: queryResult } = renderHook(() => useModernApi('getUser'))
+    expect(queryResult.current.query).toBeDefined()
+    expect(queryResult.current.invalidate).toBeDefined()
+    expect(queryResult.current.fetchedAt).toBeNull()
+    expect((queryResult.current as any).mutate).toBeUndefined()
+
+    // Mutation endpoint
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+    expect(mutationResult.current.mutate).toBeDefined()
+    expect((mutationResult.current as any).query).toBeUndefined()
+    expect((mutationResult.current as any).invalidate).toBeUndefined()
+    expect((mutationResult.current as any).fetchedAt).toBeUndefined()
   })
 })

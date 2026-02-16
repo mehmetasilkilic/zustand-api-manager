@@ -3,10 +3,12 @@ import { useApiStore } from './store'
 import {
   ApiCallOptions,
   ApiComposerConfig,
+  ApiComposerReturn,
   ApiState,
   ApiStore,
   FetchStatus
 } from './types'
+import { isApiCallOptions } from './utils'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
@@ -16,11 +18,14 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * {@link ApiQueryEndpoint} or {@link ApiMutationEndpoint} types. The returned
  * hook automatically infers parameter and response types for each endpoint.
  *
- * For queries, the hook returns `query` for manual triggering.
- * For mutations, the hook returns `mutate` with the mutation function pre-bound.
+ * For queries, bind the query function in the `queries` config and call `query(params, options?)`
+ * or `query(options?)` for void-param endpoints. An unbound fallback is available for backward
+ * compatibility when no query function is provided.
+ *
+ * For mutations, bind the mutation function in the `mutations` config and call `mutate(variables, options?)`.
  *
  * @typeParam TApiStructure - An interface where each key maps to an endpoint type.
- * @param config - Optional configuration including mutation functions and custom store.
+ * @param config - Optional configuration including query/mutation functions and custom store.
  * @returns A hook that accepts an endpoint key and returns the appropriate result type.
  *
  * @example
@@ -29,21 +34,26 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  *
  * interface MyApi {
  *   getUser: ApiQueryEndpoint<{ id: number }, User>
+ *   listUsers: ApiQueryEndpoint<void, User[]>
  *   createUser: ApiMutationEndpoint<CreateUserPayload, User>
  * }
  *
  * const useApi = createApiComposer<MyApi>({
+ *   queries: {
+ *     getUser: (params) => api.getUser(params),
+ *     listUsers: () => api.listUsers()
+ *   },
  *   mutations: {
  *     createUser: (payload) => api.createUser(payload)
  *   }
  * })
  *
- * // Query usage
+ * // Query usage (bound)
  * function UserProfile({ userId }: { userId: number }) {
  *   const { data, isLoading, query } = useApi('getUser')
  *
  *   useEffect(() => {
- *     query({ id: userId }, (params) => api.getUser(params))
+ *     query({ id: userId }, { staleTime: 60_000 })
  *   }, [userId, query])
  *
  *   return <div>{data?.name}</div>
@@ -64,11 +74,9 @@ import type { StoreApi, UseBoundStore } from 'zustand'
 export function createApiComposer<TApiStructure>(
   config?: ApiComposerConfig<TApiStructure> & { store?: UseBoundStore<StoreApi<ApiStore>> }
 ) {
-  // Return type is discriminated at call site based on whether the endpoint
-  // is a query or mutation. We use `any` here since the actual type is
-  // resolved correctly through TypeScript inference at the usage site.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return function useApiComposer<K extends keyof TApiStructure>(key: K): any {
+  return function useApiComposer<K extends keyof TApiStructure>(
+    key: K
+  ): ApiComposerReturn<TApiStructure, K> {
     const useStore = config?.store ?? useApiStore
 
     // Subscribe reactively to the state slice
@@ -83,6 +91,14 @@ export function createApiComposer<TApiStructure>(
 
     const mutationFnRef = useRef(mutationFn)
     mutationFnRef.current = mutationFn
+
+    // Check if this is a query with a pre-bound function
+    const queryFn = config?.queries?.[key] as
+      | ((params: unknown) => Promise<{ data: unknown }>)
+      | undefined
+
+    const queryFnRef = useRef(queryFn)
+    queryFnRef.current = queryFn
 
     // Common state accessors
     const commonState = {
@@ -104,10 +120,7 @@ export function createApiComposer<TApiStructure>(
 
           // For void variables: mutate(options?)
           // For non-void variables: mutate(variables, options?)
-          if (
-            args.length === 0 ||
-            (args.length === 1 && typeof args[0] === 'object' && 'onSuccess' in (args[0] as object))
-          ) {
+          if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
             variables = undefined
             options = args[0] as ApiCallOptions<unknown> | undefined
           } else {
@@ -131,7 +144,7 @@ export function createApiComposer<TApiStructure>(
         ...commonState,
         mutate,
         reset
-      }
+      } as ApiComposerReturn<TApiStructure, K>
     }
 
     // This is a query endpoint
@@ -141,16 +154,27 @@ export function createApiComposer<TApiStructure>(
         let apiCall: (params: unknown) => Promise<{ data: unknown }>
         let options: ApiCallOptions<unknown> | undefined
 
-        // For void params: query(apiCall, options?)
-        // For non-void params: query(params, apiCall, options?)
-        if (typeof args[0] === 'function') {
-          apiCall = args[0] as (params: unknown) => Promise<{ data: unknown }>
-          options = args[1] as ApiCallOptions<unknown> | undefined
-          params = undefined
+        if (queryFnRef.current) {
+          // Bound query path: query(params, options?) or query(options?) for void params
+          if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
+            params = undefined
+            options = args[0] as ApiCallOptions<unknown> | undefined
+          } else {
+            params = args[0]
+            options = args[1] as ApiCallOptions<unknown> | undefined
+          }
+          apiCall = queryFnRef.current
         } else {
-          params = args[0]
-          apiCall = args[1] as (params: unknown) => Promise<{ data: unknown }>
-          options = args[2] as ApiCallOptions<unknown> | undefined
+          // Unbound fallback: query(apiCall, options?) or query(params, apiCall, options?)
+          if (typeof args[0] === 'function') {
+            apiCall = args[0] as (params: unknown) => Promise<{ data: unknown }>
+            options = args[1] as ApiCallOptions<unknown> | undefined
+            params = undefined
+          } else {
+            params = args[0]
+            apiCall = args[1] as (params: unknown) => Promise<{ data: unknown }>
+            options = args[2] as ApiCallOptions<unknown> | undefined
+          }
         }
 
         return useStore.getState().handleApi(key as string, () => apiCall(params), options)
@@ -174,7 +198,6 @@ export function createApiComposer<TApiStructure>(
       query,
       reset,
       invalidate
-    }
+    } as ApiComposerReturn<TApiStructure, K>
   }
 }
-

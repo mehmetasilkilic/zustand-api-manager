@@ -244,17 +244,30 @@ function Dashboard() {
 
 The composer provides a fully type-safe API hook factory with parameter passthrough.
 
-1. Define your API structure and create the composer:
+1. Define your API structure and create the composer with bound query and mutation functions:
 
 ```typescript
-import { createApiComposer, ApiEndpoint } from "zustand-api-manager";
+import {
+  createApiComposer,
+  ApiQueryEndpoint,
+  ApiMutationEndpoint,
+} from "zustand-api-manager";
 
 interface MyApiStructure {
-  getUsers: ApiEndpoint<void, User[]>;
-  getPost: ApiEndpoint<{ id: number }, Post>;
+  getUsers: ApiQueryEndpoint<void, User[]>;
+  getPost: ApiQueryEndpoint<{ id: number }, Post>;
+  createPost: ApiMutationEndpoint<CreatePostPayload, Post>;
 }
 
-export const useApi = createApiComposer<MyApiStructure>();
+export const useApi = createApiComposer<MyApiStructure>({
+  queries: {
+    getUsers: () => api.getUsers(),
+    getPost: (params) => api.getPost(params),
+  },
+  mutations: {
+    createPost: (payload) => api.createPost(payload),
+  },
+});
 ```
 
 2. Use it in your components. For endpoints with parameters, pass them as the first argument:
@@ -264,8 +277,7 @@ function PostDetail({ postId }: { postId: number }) {
   const { data, isLoading, query, reset } = useApi("getPost");
 
   useEffect(() => {
-    // Params are passed through to the apiCall function
-    query({ id: postId }, (params) => fetchPost(params));
+    query({ id: postId });
   }, [postId, query]); // query is stable — won't cause extra fetches
 
   if (isLoading) return <Spinner />;
@@ -273,14 +285,14 @@ function PostDetail({ postId }: { postId: number }) {
 }
 ```
 
-For endpoints with `void` params, call `query` with just the API function:
+For endpoints with `void` params, call `query` with no arguments (or just options):
 
 ```typescript
 function UserList() {
   const { data, isLoading, query } = useApi("getUsers");
 
   useEffect(() => {
-    query(() => fetchUsers());
+    query();
   }, [query]); // stable reference — safe in deps
 
   if (isLoading) return <Spinner />;
@@ -413,11 +425,14 @@ const { data } = usePolling<Stats>("stats", () => fetchStats(), 30_000, { immedi
 
 ### `createApiComposer`
 
-Creates a strongly-typed API composer. For query endpoints, returns `query`, `reset`, `invalidate`, `status`, and `fetchedAt`. For mutation endpoints, returns `mutate` and `reset`. All function references are stable across re-renders. Accepts optional config with mutation functions:
+Creates a strongly-typed API composer. For query endpoints, returns `query`, `reset`, `invalidate`, `status`, and `fetchedAt`. For mutation endpoints, returns `mutate` and `reset`. All function references are stable across re-renders. Accepts optional config with bound query and mutation functions:
 
 ```typescript
-const useApi = createApiComposer<MyApiStructure>(); // queries only
-const useApi = createApiComposer<MyApiStructure>({ // with mutations
+const useApi = createApiComposer<MyApiStructure>({
+  queries: {
+    getUser: (params) => api.getUser(params),
+    listUsers: () => api.listUsers()
+  },
   mutations: {
     createUser: (payload) => api.createUser(payload)
   }

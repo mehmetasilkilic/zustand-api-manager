@@ -84,6 +84,10 @@ const api = {
 // ====================
 
 const useApi = createApiComposer<MyApi>({
+  queries: {
+    getUser: api.getUser,
+    listUsers: api.listUsers
+  },
   mutations: {
     createUser: api.createUser,
     updateUser: api.updateUser,
@@ -99,7 +103,7 @@ function UserProfile({ userId }: { userId: number }) {
   const { data, isLoading, isError, error, query, invalidate } = useApi('getUser')
 
   useEffect(() => {
-    query({ id: userId }, api.getUser, {
+    query({ id: userId }, {
       staleTime: 60_000 // Cache for 1 minute
     })
   }, [userId, query])
@@ -136,7 +140,7 @@ function UserList() {
   const { data, isLoading, query } = useApi('listUsers')
 
   useEffect(() => {
-    query(api.listUsers)
+    query()
   }, [query])
 
   if (isLoading) return <div>Loading users...</div>
@@ -375,11 +379,8 @@ export default function App() {
             and <code>reset</code> (no invalidate or fetchedAt)
           </li>
           <li>
-            Mutation functions are bound at composer creation time via the <code>mutations</code>{' '}
-            config
-          </li>
-          <li>
-            Query functions are passed at call time via <code>query</code>
+            Both query and mutation functions are bound at composer creation time via the{' '}
+            <code>queries</code> and <code>mutations</code> config
           </li>
         </ul>
       </div>

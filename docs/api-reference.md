@@ -330,7 +330,7 @@ configureApiStore({
 
 ### createApiComposer
 
-Create a type-safe API composer that supports both query and mutation endpoints.
+Create a type-safe API composer that supports both query and mutation endpoints. Both query and mutation functions are bound at composer creation time.
 
 ```typescript
 import {
@@ -350,15 +350,24 @@ interface MyApi {
 }
 
 const useApi = createApiComposer<MyApi>({
+  queries: {
+    getUser: (params) => api.getUser(params),
+    listPosts: () => api.listPosts()
+  },
   mutations: {
     createPost: (payload) => api.createPost(payload),
     updatePost: (payload) => api.updatePost(payload)
   }
 })
 
-// Query usage - pass API function at call time
+// Query usage - function is pre-bound, just pass params and options
 const { data, query } = useApi('getUser')
-query({ id: 1 }, (params) => api.getUser(params))
+query({ id: 1 })
+query({ id: 1 }, { staleTime: 60_000 })
+
+// Void-param query - no arguments needed
+const { query: listQuery } = useApi('listPosts')
+listQuery()
 
 // Mutation usage - function is pre-bound
 const { mutate, isLoading } = useApi('createPost')
@@ -368,16 +377,15 @@ mutate({ title: 'Hello', content: '...' })
 **Key Differences:**
 - **Query endpoints** (`ApiQueryEndpoint`) return `query`, `reset`, `invalidate`, and `fetchedAt`
 - **Mutation endpoints** (`ApiMutationEndpoint`) return `mutate` and `reset` (no invalidate or fetchedAt)
-- Mutation functions are bound at composer creation via the `mutations` config
-- Query functions are passed at call time
+- Both query and mutation functions are bound at composer creation via the `queries` and `mutations` config
 
 **Query endpoints:**
-- `query()` - Execute the query
+- `query(params?, options?)` - Execute the query
 - `reset()` - Reset the state
 - `invalidate()` - Invalidate the cache
 
 **Mutation endpoints:**
-- `mutate()` - Execute the mutation
+- `mutate(variables?, options?)` - Execute the mutation
 - `reset()` - Reset the state
 
 ---

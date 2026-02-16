@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useApiStore } from './store'
 import { ApiCallOptions, ApiQueryResult, ApiMutationResult, ApiStore, FetchStatus } from './types'
+import { isApiCallOptions } from './utils'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /**
@@ -245,10 +246,7 @@ export const useApiMutation = <T, V = void>(
 
       // For void variables: mutate(options?)
       // For non-void variables: mutate(variables, options?)
-      if (
-        args.length === 0 ||
-        (args.length === 1 && typeof args[0] === 'object' && 'onSuccess' in (args[0] as object))
-      ) {
+      if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
         variables = undefined as V
         options = args[0] as ApiCallOptions<T> | undefined
       } else {

@@ -81,7 +81,11 @@ interface SecondApiStructure {
 }
 
 const secondStore = createApiStore({ storageKey: 'second-store' })
-const useSecondApi = secondStore.createApiComposer<SecondApiStructure>()
+const useSecondApi = secondStore.createApiComposer<SecondApiStructure>({
+  queries: {
+    getComments: fetchComments
+  }
+})
 
 // Default store composer ------------------------------------------------------
 
@@ -90,7 +94,12 @@ interface DefaultApiStructure {
   getPosts: ApiQueryEndpoint<void, Post[]>
 }
 
-const useApi = createApiComposer<DefaultApiStructure>()
+const useApi = createApiComposer<DefaultApiStructure>({
+  queries: {
+    getUser: (params) => fetchUser(params.id),
+    getPosts: fetchPosts
+  }
+})
 
 // Components ------------------------------------------------------------------
 
@@ -255,7 +264,7 @@ const ComposerExample: React.FC = () => {
   const { data: posts, isLoading, isError, status, fetchedAt, query, reset } = useApi('getPosts')
 
   const loadPosts = () => {
-    void query(() => fetchPosts(), { staleTime: 10000 })
+    void query({ staleTime: 10000 })
   }
 
   return (
@@ -305,7 +314,7 @@ const SecondStoreExample: React.FC = () => {
   } = useSecondApi('getComments')
 
   const loadComments = () => {
-    void query(() => fetchComments(), { staleTime: 8000 })
+    void query({ staleTime: 8000 })
   }
 
   return (

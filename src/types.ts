@@ -528,6 +528,11 @@ export interface ApiMutationResult<T, V = void> {
  * ```
  */
 export interface ApiComposerConfig<TApiStructure> {
+  queries?: {
+    [K in keyof TApiStructure]?: TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
+      ? (params: P) => Promise<{ data: R }>
+      : never
+  }
   mutations?: {
     [K in keyof TApiStructure]?: TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
       ? (variables: V) => Promise<{ data: R }>
@@ -553,8 +558,8 @@ export interface ApiComposerQueryResult<R, P = void> {
   fetchedAt: number | null
   query: (
     ...args: P extends void
-      ? [apiCall: (params: P) => Promise<{ data: R }>, options?: ApiCallOptions<R>]
-      : [params: P, apiCall: (params: P) => Promise<{ data: R }>, options?: ApiCallOptions<R>]
+      ? [options?: ApiCallOptions<R>]
+      : [params: P, options?: ApiCallOptions<R>]
   ) => Promise<R | undefined>
   reset: () => void
   invalidate: () => void
@@ -582,3 +587,18 @@ export interface ApiComposerMutationResult<R, V = void> {
   ) => Promise<R | undefined>
   reset: () => void
 }
+
+/**
+ * Conditional return type for {@link createApiComposer}.
+ * Resolves to {@link ApiComposerQueryResult} for query endpoints
+ * or {@link ApiComposerMutationResult} for mutation endpoints.
+ *
+ * @typeParam TApiStructure - The API structure interface.
+ * @typeParam K - The endpoint key.
+ */
+export type ApiComposerReturn<TApiStructure, K extends keyof TApiStructure> =
+  TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
+    ? ApiComposerQueryResult<R, P>
+    : TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
+      ? ApiComposerMutationResult<R, V>
+      : never
