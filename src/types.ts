@@ -231,7 +231,7 @@ export interface ApiMutationEndpoint<V, R> {
  */
 export type ApiMiddlewareHandler = <T>(
   key: string,
-  apiCall: () => Promise<{ data: T }>,
+  apiCall: () => Promise<T>,
   options: ApiCallOptions<T>
 ) => Promise<void>
 
@@ -363,7 +363,7 @@ export interface ApiStore {
    */
   handleApi: <T>(
     key: string,
-    apiCall: () => Promise<{ data: T }>,
+    apiCall: () => Promise<T>,
     options?: ApiCallOptions<T>
   ) => Promise<T | undefined>
 
@@ -441,7 +441,9 @@ export interface ApiQueryResult<T> {
   status: FetchStatus
   /** `true` if no request has been made yet for this key. */
   isIdle: boolean
-  /** `true` if a request is currently in progress. */
+  /** `true` if a request is in progress (includes background refetches). */
+  isFetching: boolean
+  /** `true` only on first load (loading and no data yet). */
   isLoading: boolean
   /** `true` if the last request completed successfully. */
   isSuccess: boolean
@@ -454,12 +456,12 @@ export interface ApiQueryResult<T> {
   /**
    * Trigger an API call for this endpoint.
    *
-   * @param apiCall - A function that returns a promise resolving to `{ data: T }`.
+   * @param apiCall - A function that returns a promise resolving to `T`.
    * @param options - Optional configuration for persistence, retries, abort, and callbacks.
    * @returns The response data on success, or `undefined` otherwise.
    */
   query: (
-    apiCall: () => Promise<{ data: T }>,
+    apiCall: () => Promise<T>,
     options?: ApiCallOptions<T>
   ) => Promise<T | undefined>
   /** Reset this endpoint's state back to idle and remove it from persistence. */
@@ -482,7 +484,9 @@ export interface ApiMutationResult<T, V = void> {
   status: FetchStatus
   /** `true` if no mutation has been called yet for this key. */
   isIdle: boolean
-  /** `true` if a mutation is currently in progress. */
+  /** `true` if a mutation is in progress (includes background refetches). */
+  isFetching: boolean
+  /** `true` only on first load (loading and no data yet). */
   isLoading: boolean
   /** `true` if the last mutation completed successfully. */
   isSuccess: boolean
@@ -551,7 +555,7 @@ export type OptimisticUpdaters<TApi, V> = {
  */
 export interface MutationEndpointConfig<TApi, V, R> {
   /** The mutation function to call. */
-  fn: (variables: V) => Promise<{ data: R }>
+  fn: (variables: V) => Promise<R>
   /** Query keys to invalidate on successful mutation. */
   invalidates?: QueryKeys<TApi>[]
   /** Optimistic updaters to apply before the mutation resolves. */
@@ -588,13 +592,13 @@ export interface MutationEndpointConfig<TApi, V, R> {
 export interface ApiComposerConfig<TApiStructure> {
   queries?: {
     [K in keyof TApiStructure]?: TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
-      ? (params: P) => Promise<{ data: R }>
+      ? (params: P) => Promise<R>
       : never
   }
   mutations?: {
     [K in keyof TApiStructure]?: TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
       ?
-          | ((variables: V) => Promise<{ data: R }>)
+          | ((variables: V) => Promise<R>)
           | MutationEndpointConfig<TApiStructure, V, R>
       : never
   }
@@ -611,6 +615,9 @@ export interface ApiComposerQueryResult<R, P = void> {
   data: R | null
   status: FetchStatus
   isIdle: boolean
+  /** `true` if a request is in progress (includes background refetches). */
+  isFetching: boolean
+  /** `true` only on first load (loading and no data yet). */
   isLoading: boolean
   isSuccess: boolean
   isError: boolean
@@ -636,6 +643,9 @@ export interface ApiComposerMutationResult<R, V = void> {
   data: R | null
   status: FetchStatus
   isIdle: boolean
+  /** `true` if a mutation is in progress (includes background refetches). */
+  isFetching: boolean
+  /** `true` only on first load (loading and no data yet). */
   isLoading: boolean
   isSuccess: boolean
   isError: boolean
@@ -672,7 +682,7 @@ export type ApiComposerReturn<TApiStructure, K extends keyof TApiStructure> =
  */
 export interface UseApiQueryOptions<T = unknown> extends ApiCallOptions<T> {
   /** The function to call for fetching data. When provided, enables declarative auto-fetch mode. */
-  queryFn?: () => Promise<{ data: T }>
+  queryFn?: () => Promise<T>
   /** If `false`, the auto-fetch is paused. Defaults to `true`. */
   enabled?: boolean
 }

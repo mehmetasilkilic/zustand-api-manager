@@ -77,9 +77,9 @@ describe('resetApiState', () => {
 
 describe('handleApi — success path', () => {
   it('sets status to LOADING then SUCCESS', async () => {
-    let resolveApiCall: (value: { data: string }) => void
+    let resolveApiCall: (value: string) => void
     const apiCall = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveApiCall = resolve
       })
 
@@ -87,35 +87,35 @@ describe('handleApi — success path', () => {
     // Should be LOADING while the promise is pending
     expect(getState().apiStates['users']?.status).toBe(FetchStatus.LOADING)
 
-    resolveApiCall!({ data: 'result' })
+    resolveApiCall!('result')
     await promise
 
     expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
   })
 
   it('stores the response data', async () => {
-    const apiCall = () => Promise.resolve({ data: { id: 1, name: 'test' } })
+    const apiCall = () => Promise.resolve({ id: 1, name: 'test' })
     await getState().handleApi('users', apiCall)
     expect(getState().apiStates['users'].data).toEqual({ id: 1, name: 'test' })
   })
 
   it('calls onSuccess callback with response data', async () => {
     const onSuccess = vi.fn()
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, { onSuccess })
     expect(onSuccess).toHaveBeenCalledOnce()
     expect(onSuccess).toHaveBeenCalledWith('ok')
   })
 
   it('returns the response data on success', async () => {
-    const apiCall = () => Promise.resolve({ data: { id: 1 } })
+    const apiCall = () => Promise.resolve({ id: 1 })
     const result = await getState().handleApi('users', apiCall)
     expect(result).toEqual({ id: 1 })
   })
 
   it('sets fetchedAt timestamp on success', async () => {
     const before = Date.now()
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     const after = Date.now()
     const fetchedAt = getState().apiStates['users'].fetchedAt!
@@ -130,7 +130,7 @@ describe('handleApi — error path', () => {
   it('sets status to LOADING then ERROR', async () => {
     let rejectApiCall: (reason: Error) => void
     const apiCall = () =>
-      new Promise<{ data: string }>((_, reject) => {
+      new Promise<string>((_, reject) => {
         rejectApiCall = reject
       })
 
@@ -194,7 +194,7 @@ describe('handleApi — error path', () => {
 
 describe('handleApi — persistence', () => {
   it('respects persist option during loading and success', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, { persist: true })
     expect(getState().persistentKeys['users']).toBe(true)
     expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
@@ -214,7 +214,7 @@ describe('handleApi — abort', () => {
   it('sets ERROR with ABORT_ERR when signal is already aborted', async () => {
     const controller = new AbortController()
     controller.abort()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+    const apiCall = vi.fn(() => Promise.resolve('ok'))
     await getState().handleApi('users', apiCall, { signal: controller.signal })
     const state = getState().apiStates['users']
     expect(state.status).toBe(FetchStatus.ERROR)
@@ -225,7 +225,7 @@ describe('handleApi — abort', () => {
     const controller = new AbortController()
     const onSuccess = vi.fn()
     const apiCall = () =>
-      new Promise<{ data: string }>((_, reject) => {
+      new Promise<string>((_, reject) => {
         controller.abort()
         reject(new Error('aborted'))
       })
@@ -289,7 +289,7 @@ describe('handleApi — retry', () => {
     const apiCall = () => {
       callCount++
       if (callCount < 3) return Promise.reject(new Error('fail'))
-      return Promise.resolve({ data: 'recovered' })
+      return Promise.resolve('recovered')
     }
 
     const promise = getState().handleApi('users', apiCall, { retry: 3 })
@@ -307,13 +307,13 @@ describe('handleApi — retry', () => {
 
 describe('handleApi — race condition', () => {
   it('discards stale response when a newer request is made', async () => {
-    let resolveFirst: (value: { data: string }) => void
+    let resolveFirst: (value: string) => void
     const firstCall = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveFirst = resolve
       })
 
-    const secondCall = () => Promise.resolve({ data: 'second' })
+    const secondCall = () => Promise.resolve('second')
 
     // Start first request
     const firstPromise = getState().handleApi('users', firstCall)
@@ -326,7 +326,7 @@ describe('handleApi — race condition', () => {
     expect(getState().apiStates['users'].data).toBe('second')
 
     // Now resolve the first (stale) request — it should be discarded
-    resolveFirst!({ data: 'first' })
+    resolveFirst!('first')
     await firstPromise
 
     // State should still reflect the second (latest) request
@@ -336,11 +336,11 @@ describe('handleApi — race condition', () => {
   it('discards stale error when a newer request succeeds', async () => {
     let rejectFirst: (reason: Error) => void
     const firstCall = () =>
-      new Promise<{ data: string }>((_, reject) => {
+      new Promise<string>((_, reject) => {
         rejectFirst = reject
       })
 
-    const secondCall = () => Promise.resolve({ data: 'success' })
+    const secondCall = () => Promise.resolve('success')
 
     const firstPromise = getState().handleApi('users', firstCall)
     const secondPromise = getState().handleApi('users', secondCall)
@@ -357,19 +357,19 @@ describe('handleApi — race condition', () => {
   })
 
   it('returns undefined for stale requests', async () => {
-    let resolveFirst: (value: { data: string }) => void
+    let resolveFirst: (value: string) => void
     const firstCall = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveFirst = resolve
       })
-    const secondCall = () => Promise.resolve({ data: 'second' })
+    const secondCall = () => Promise.resolve('second')
 
     const firstPromise = getState().handleApi('users', firstCall)
     const secondResult = await getState().handleApi('users', secondCall)
 
     expect(secondResult).toBe('second')
 
-    resolveFirst!({ data: 'first' })
+    resolveFirst!('first')
     const firstResult = await firstPromise
 
     expect(firstResult).toBeUndefined()
@@ -380,7 +380,7 @@ describe('handleApi — race condition', () => {
 
 describe('handleApi — staleTime', () => {
   it('skips fetch and returns cached data when within staleTime', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'fresh' }))
+    const apiCall = vi.fn(() => Promise.resolve('fresh'))
 
     // First call populates the cache
     await getState().handleApi('users', apiCall, { staleTime: 60_000 })
@@ -394,7 +394,7 @@ describe('handleApi — staleTime', () => {
 
   it('refetches when staleTime has elapsed', async () => {
     vi.useFakeTimers()
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     await getState().handleApi('users', apiCall, { staleTime: 1000 })
     expect(apiCall).toHaveBeenCalledTimes(1)
@@ -409,7 +409,7 @@ describe('handleApi — staleTime', () => {
   })
 
   it('does not cache when staleTime is not provided', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     await getState().handleApi('users', apiCall)
     await getState().handleApi('users', apiCall)
@@ -421,9 +421,9 @@ describe('handleApi — staleTime', () => {
 
 describe('handleApi — optimistic updates', () => {
   it('sets optimistic data immediately in LOADING state', async () => {
-    let resolveApiCall: (value: { data: string }) => void
+    let resolveApiCall: (value: string) => void
     const apiCall = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveApiCall = resolve
       })
 
@@ -436,7 +436,7 @@ describe('handleApi — optimistic updates', () => {
     expect(state.status).toBe(FetchStatus.LOADING)
     expect(state.data).toBe('optimistic')
 
-    resolveApiCall!({ data: 'real' })
+    resolveApiCall!('real')
     await promise
 
     // Should now have the real data
@@ -478,7 +478,7 @@ describe('handleApi — fresh errorHandlers', () => {
   it('calls error handlers added after handleApi started', async () => {
     let rejectApiCall: (reason: Error) => void
     const apiCall = () =>
-      new Promise<{ data: string }>((_, reject) => {
+      new Promise<string>((_, reject) => {
         rejectApiCall = reject
       })
 
@@ -518,7 +518,7 @@ describe('addMiddleware', () => {
     }
     getState().addMiddleware(mw)
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('test', apiCall)
 
     expect(calls).toEqual(['before', 'after'])
@@ -542,7 +542,7 @@ describe('addMiddleware', () => {
     getState().addMiddleware(mw1)
     getState().addMiddleware(mw2)
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('test', apiCall)
 
     // mw1 wraps mw2 wraps base — but reduce feeds mw1 first then mw2:
@@ -618,7 +618,7 @@ describe('unsubscribe', () => {
 describe('handleApi — timeout', () => {
   it('aborts with TIMEOUT code when request exceeds timeout', async () => {
     vi.useFakeTimers()
-    const apiCall = () => new Promise<{ data: string }>(() => {}) // never resolves
+    const apiCall = () => new Promise<string>(() => {}) // never resolves
 
     const promise = getState().handleApi('users', apiCall, { timeout: 1000 })
 
@@ -634,7 +634,7 @@ describe('handleApi — timeout', () => {
   })
 
   it('succeeds normally when request completes before timeout', async () => {
-    const apiCall = () => Promise.resolve({ data: 'fast' })
+    const apiCall = () => Promise.resolve('fast')
     const result = await getState().handleApi('users', apiCall, { timeout: 5000 })
     expect(result).toBe('fast')
     expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
@@ -643,7 +643,7 @@ describe('handleApi — timeout', () => {
   it('respects user abort signal even when timeout is set', async () => {
     vi.useFakeTimers()
     const controller = new AbortController()
-    const apiCall = () => new Promise<{ data: string }>(() => {})
+    const apiCall = () => new Promise<string>(() => {})
 
     const promise = getState().handleApi('users', apiCall, {
       timeout: 5000,
@@ -664,7 +664,7 @@ describe('handleApi — timeout', () => {
   it('calls onError callback with timeout error', async () => {
     vi.useFakeTimers()
     const onError = vi.fn()
-    const apiCall = () => new Promise<{ data: string }>(() => {})
+    const apiCall = () => new Promise<string>(() => {})
 
     const promise = getState().handleApi('users', apiCall, { timeout: 500, onError })
 
@@ -708,7 +708,7 @@ describe('handleApi — shouldRetry', () => {
     const apiCall = () => {
       callCount++
       if (callCount < 3) return Promise.reject(new Error('transient'))
-      return Promise.resolve({ data: 'ok' })
+      return Promise.resolve('ok')
     }
 
     const promise = getState().handleApi('users', apiCall, {
@@ -754,7 +754,7 @@ describe('handleApi — custom backoff', () => {
 describe('handleApi — onSettled', () => {
   it('calls onSettled after success', async () => {
     const onSettled = vi.fn()
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, { onSettled })
     expect(onSettled).toHaveBeenCalledOnce()
   })
@@ -768,7 +768,7 @@ describe('handleApi — onSettled', () => {
 
   it('calls onSettled after onSuccess', async () => {
     const order: string[] = []
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, {
       onSuccess: () => order.push('success'),
       onSettled: () => order.push('settled')
@@ -791,10 +791,10 @@ describe('handleApi — onSettled', () => {
 
 describe('handleApi — deduplication', () => {
   it('returns same promise for concurrent calls with dedupe', async () => {
-    let resolveApiCall: (value: { data: string }) => void
+    let resolveApiCall: (value: string) => void
     const apiCall = vi.fn(
       () =>
-        new Promise<{ data: string }>(resolve => {
+        new Promise<string>(resolve => {
           resolveApiCall = resolve
         })
     )
@@ -807,7 +807,7 @@ describe('handleApi — deduplication', () => {
     // API should only be called once
     expect(apiCall).toHaveBeenCalledTimes(1)
 
-    resolveApiCall!({ data: 'shared' })
+    resolveApiCall!('shared')
     const [result1, result2] = await Promise.all([promise1, promise2])
 
     expect(result1).toBe('shared')
@@ -815,7 +815,7 @@ describe('handleApi — deduplication', () => {
   })
 
   it('starts fresh request after previous deduped request completes', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     await getState().handleApi('users', apiCall, { dedupe: true })
     expect(apiCall).toHaveBeenCalledTimes(1)
@@ -825,19 +825,19 @@ describe('handleApi — deduplication', () => {
   })
 
   it('does not dedupe when option is not set', async () => {
-    let resolveFirst: (value: { data: string }) => void
+    let resolveFirst: (value: string) => void
     const firstCall = vi.fn(
       () =>
-        new Promise<{ data: string }>(resolve => {
+        new Promise<string>(resolve => {
           resolveFirst = resolve
         })
     )
-    const secondCall = vi.fn(() => Promise.resolve({ data: 'second' }))
+    const secondCall = vi.fn(() => Promise.resolve('second'))
 
     const promise1 = getState().handleApi('users', firstCall)
     const promise2 = getState().handleApi('users', secondCall)
 
-    resolveFirst!({ data: 'first' })
+    resolveFirst!('first')
     await Promise.all([promise1, promise2])
 
     // Both should be called
@@ -850,7 +850,7 @@ describe('handleApi — deduplication', () => {
 
 describe('invalidateApi', () => {
   it('clears fetchedAt timestamp', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     expect(getState().apiStates['users'].fetchedAt).not.toBeNull()
 
@@ -859,7 +859,7 @@ describe('invalidateApi', () => {
   })
 
   it('preserves existing data and status', async () => {
-    const apiCall = () => Promise.resolve({ data: 'mydata' })
+    const apiCall = () => Promise.resolve('mydata')
     await getState().handleApi('users', apiCall)
 
     getState().invalidateApi('users')
@@ -868,7 +868,7 @@ describe('invalidateApi', () => {
   })
 
   it('causes staleTime to refetch after invalidation', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     // First call populates cache
     await getState().handleApi('users', apiCall, { staleTime: 60_000 })
@@ -897,7 +897,7 @@ describe('invalidateApi', () => {
 
 describe('invalidateApis', () => {
   it('clears fetchedAt for multiple keys in a single update', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
     expect(getState().apiStates['users'].fetchedAt).not.toBeNull()
@@ -909,7 +909,7 @@ describe('invalidateApis', () => {
   })
 
   it('preserves data and status for all keys', async () => {
-    const apiCall = () => Promise.resolve({ data: 'mydata' })
+    const apiCall = () => Promise.resolve('mydata')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
 
@@ -927,7 +927,7 @@ describe('invalidateApis', () => {
   })
 
   it('causes staleTime to refetch after batch invalidation', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     await getState().handleApi('users', apiCall, { staleTime: 60_000 })
     await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
@@ -952,7 +952,7 @@ describe('invalidateApis', () => {
 
 describe('resetApiStates', () => {
   it('deletes state for multiple keys in a single update', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
 
@@ -962,7 +962,7 @@ describe('resetApiStates', () => {
   })
 
   it('removes all keys from persistentKeys', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, { persist: true })
     await getState().handleApi('posts', apiCall, { persist: true })
     expect(getState().persistentKeys['users']).toBe(true)
@@ -974,7 +974,7 @@ describe('resetApiStates', () => {
   })
 
   it('leaves other keys untouched', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
     await getState().handleApi('comments', apiCall)
@@ -999,8 +999,8 @@ describe('store isolation', () => {
     const storeA = createApiStore({ storageKey: 'store-a' })
     const storeB = createApiStore({ storageKey: 'store-b' })
 
-    await storeA.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'from-a' }))
-    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'from-b' }))
+    await storeA.useStore.getState().handleApi('users', () => Promise.resolve('from-a'))
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve('from-b'))
 
     expect(storeA.useStore.getState().apiStates['users'].data).toBe('from-a')
     expect(storeB.useStore.getState().apiStates['users'].data).toBe('from-b')
@@ -1010,9 +1010,9 @@ describe('store isolation', () => {
     const storeA = createApiStore({ storageKey: 'store-a2' })
     const storeB = createApiStore({ storageKey: 'store-b2' })
 
-    let resolveA: (value: { data: string }) => void
+    let resolveA: (value: string) => void
     const slowCallA = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveA = resolve
       })
 
@@ -1020,10 +1020,10 @@ describe('store isolation', () => {
     const promiseA = storeA.useStore.getState().handleApi('users', slowCallA)
 
     // storeB makes a quick request with the same key — should not affect storeA
-    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'fast-b' }))
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve('fast-b'))
 
     // Resolve storeA's request — should NOT be treated as stale
-    resolveA!({ data: 'slow-a' })
+    resolveA!('slow-a')
     await promiseA
 
     expect(storeA.useStore.getState().apiStates['users'].data).toBe('slow-a')
@@ -1034,14 +1034,14 @@ describe('store isolation', () => {
     const storeA = createApiStore({ storageKey: 'store-a3' })
     const storeB = createApiStore({ storageKey: 'store-b3' })
 
-    let resolveA: (value: { data: string }) => void
+    let resolveA: (value: string) => void
     const callA = vi.fn(
       () =>
-        new Promise<{ data: string }>(resolve => {
+        new Promise<string>(resolve => {
           resolveA = resolve
         })
     )
-    const callB = vi.fn(() => Promise.resolve({ data: 'b' }))
+    const callB = vi.fn(() => Promise.resolve('b'))
 
     // Start a deduped request on storeA
     const promiseA = storeA.useStore.getState().handleApi('users', callA, { dedupe: true })
@@ -1052,7 +1052,7 @@ describe('store isolation', () => {
     expect(callA).toHaveBeenCalledTimes(1)
     expect(callB).toHaveBeenCalledTimes(1)
 
-    resolveA!({ data: 'a' })
+    resolveA!('a')
     await promiseA
   })
 
@@ -1060,7 +1060,7 @@ describe('store isolation', () => {
     const storeA = createApiStore({ storageKey: 'store-a4' })
     const storeB = createApiStore({ storageKey: 'store-b4' })
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
 
     await storeA.useStore.getState().handleApi('users', apiCall)
     await storeB.useStore.getState().handleApi('users', apiCall)
@@ -1083,7 +1083,7 @@ describe('handleApi — throwOnError', () => {
   })
 
   it('resolves with data when throwOnError is true and request succeeds', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     const result = await getState().handleApi('users', apiCall, { throwOnError: true })
     expect(result).toBe('ok')
   })
@@ -1124,7 +1124,7 @@ describe('handleApi — throwOnError', () => {
 
 describe('resetAll', () => {
   it('clears all API states', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
     await getState().handleApi('comments', apiCall)
@@ -1135,7 +1135,7 @@ describe('resetAll', () => {
   })
 
   it('clears all persistentKeys', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall, { persist: true })
     await getState().handleApi('posts', apiCall, { persist: true })
 
@@ -1154,7 +1154,7 @@ describe('resetAll', () => {
 
 describe('invalidateAll', () => {
   it('clears fetchedAt for all keys', async () => {
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
 
@@ -1168,7 +1168,7 @@ describe('invalidateAll', () => {
   })
 
   it('preserves data and status for all keys', async () => {
-    const apiCall = () => Promise.resolve({ data: 'mydata' })
+    const apiCall = () => Promise.resolve('mydata')
     await getState().handleApi('users', apiCall)
     await getState().handleApi('posts', apiCall)
 
@@ -1181,7 +1181,7 @@ describe('invalidateAll', () => {
   })
 
   it('causes staleTime to refetch all keys after invalidation', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'data' }))
+    const apiCall = vi.fn(() => Promise.resolve('data'))
 
     await getState().handleApi('users', apiCall, { staleTime: 60_000 })
     await getState().handleApi('posts', apiCall, { staleTime: 60_000 })
@@ -1222,7 +1222,7 @@ describe('createApiStore — custom storage', () => {
     }
 
     const { useStore } = createApiStore({ storageKey: 'custom-sync', storage: customStorage })
-    const apiCall = () => Promise.resolve({ data: 'persisted' })
+    const apiCall = () => Promise.resolve('persisted')
     await useStore.getState().handleApi('test', apiCall, { persist: true })
 
     expect(useStore.getState().apiStates['test'].data).toBe('persisted')
@@ -1246,7 +1246,7 @@ describe('createApiStore — custom storage', () => {
     }
 
     const { useStore } = createApiStore({ storageKey: 'custom-async', storage: asyncStorage })
-    const apiCall = () => Promise.resolve({ data: 'async-data' })
+    const apiCall = () => Promise.resolve('async-data')
     await useStore.getState().handleApi('test', apiCall, { persist: true })
 
     expect(useStore.getState().apiStates['test'].data).toBe('async-data')
@@ -1269,7 +1269,7 @@ describe('createApiStore from index — factory with bound hooks', () => {
     // Use the raw store to verify
     await store.useStore
       .getState()
-      .handleApi('test', () => Promise.resolve({ data: 'factory-data' }))
+      .handleApi('test', () => Promise.resolve('factory-data'))
 
     expect(store.useStore.getState().apiStates['test'].data).toBe('factory-data')
     // Default store should not have this data
@@ -1280,8 +1280,8 @@ describe('createApiStore from index — factory with bound hooks', () => {
     const storeA = createApiStoreFromIndex({ storageKey: 'factory-a' })
     const storeB = createApiStoreFromIndex({ storageKey: 'factory-b' })
 
-    await storeA.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'a-data' }))
-    await storeB.useStore.getState().handleApi('users', () => Promise.resolve({ data: 'b-data' }))
+    await storeA.useStore.getState().handleApi('users', () => Promise.resolve('a-data'))
+    await storeB.useStore.getState().handleApi('users', () => Promise.resolve('b-data'))
 
     expect(storeA.useStore.getState().apiStates['users'].data).toBe('a-data')
     expect(storeB.useStore.getState().apiStates['users'].data).toBe('b-data')
@@ -1297,27 +1297,27 @@ describe('middleware — error handling', () => {
     }
     getState().addMiddleware(mw)
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await expect(getState().handleApi('users', apiCall)).rejects.toThrow('middleware-crash')
   })
 
   it('middleware can modify the api call', async () => {
     const mw: ApiMiddleware = next => async (key, _apiCall, options) => {
       // Replace the api call with a different one
-      const modifiedCall = () => Promise.resolve({ data: 'intercepted' })
+      const modifiedCall = () => Promise.resolve('intercepted')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await next(key, modifiedCall as any, options as any)
     }
     getState().addMiddleware(mw)
 
-    const apiCall = () => Promise.resolve({ data: 'original' })
+    const apiCall = () => Promise.resolve('original')
     await getState().handleApi('users', apiCall)
 
     expect(getState().apiStates['users'].data).toBe('intercepted')
   })
 
   it('middleware can short-circuit and not call next', async () => {
-    const apiCall = vi.fn(() => Promise.resolve({ data: 'ok' }))
+    const apiCall = vi.fn(() => Promise.resolve('ok'))
     const mw: ApiMiddleware = () => async () => {
       // Intentionally do nothing — don't call next
     }
@@ -1341,7 +1341,7 @@ describe('middleware — error handling', () => {
 
     const unsub = getState().addMiddleware(mw)
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await getState().handleApi('first', apiCall)
     expect(calls).toEqual(['mw'])
 
@@ -1400,7 +1400,7 @@ describe('handleApi — onSettled with middleware crash', () => {
     }
     getState().addMiddleware(mw)
 
-    const apiCall = () => Promise.resolve({ data: 'ok' })
+    const apiCall = () => Promise.resolve('ok')
     await expect(getState().handleApi('users', apiCall, { onSettled })).rejects.toThrow(
       'middleware-crash'
     )
@@ -1413,9 +1413,9 @@ describe('handleApi — onSettled with middleware crash', () => {
 
 describe('activeRequests cleanup', () => {
   it('subsequent requests work after cleanup of previous request tracking', async () => {
-    const apiCall1 = () => Promise.resolve({ data: 'first' })
-    const apiCall2 = () => Promise.resolve({ data: 'second' })
-    const apiCall3 = () => Promise.resolve({ data: 'third' })
+    const apiCall1 = () => Promise.resolve('first')
+    const apiCall2 = () => Promise.resolve('second')
+    const apiCall3 = () => Promise.resolve('third')
 
     await getState().handleApi('users', apiCall1)
     expect(getState().apiStates['users'].data).toBe('first')
@@ -1428,13 +1428,13 @@ describe('activeRequests cleanup', () => {
   })
 
   it('race condition still works after cleanup', async () => {
-    let resolveFirst: (value: { data: string }) => void
+    let resolveFirst: (value: string) => void
     const firstCall = () =>
-      new Promise<{ data: string }>(resolve => {
+      new Promise<string>(resolve => {
         resolveFirst = resolve
       })
-    const secondCall = () => Promise.resolve({ data: 'second' })
-    const thirdCall = () => Promise.resolve({ data: 'third' })
+    const secondCall = () => Promise.resolve('second')
+    const thirdCall = () => Promise.resolve('third')
 
     // First request (will be stale)
     const firstPromise = getState().handleApi('users', firstCall)
@@ -1444,7 +1444,7 @@ describe('activeRequests cleanup', () => {
     expect(getState().apiStates['users'].data).toBe('second')
 
     // Resolve stale first
-    resolveFirst!({ data: 'first' })
+    resolveFirst!('first')
     await firstPromise
     expect(getState().apiStates['users'].data).toBe('second')
 
@@ -1493,7 +1493,7 @@ describe('persistence rehydration', () => {
     const store1 = createApiStore({ storageKey: 'rehydrate-test', storage: customStorage })
     await store1.useStore
       .getState()
-      .handleApi('users', () => Promise.resolve({ data: 'persisted-data' }), { persist: true })
+      .handleApi('users', () => Promise.resolve('persisted-data'), { persist: true })
 
     expect(store1.useStore.getState().apiStates['users'].data).toBe('persisted-data')
     expect(storage['rehydrate-test']).toBeDefined()
@@ -1525,10 +1525,10 @@ describe('persistence rehydration', () => {
     const store1 = createApiStore({ storageKey: 'rehydrate-selective', storage: customStorage })
     await store1.useStore
       .getState()
-      .handleApi('persisted', () => Promise.resolve({ data: 'saved' }), { persist: true })
+      .handleApi('persisted', () => Promise.resolve('saved'), { persist: true })
     await store1.useStore
       .getState()
-      .handleApi('ephemeral', () => Promise.resolve({ data: 'not-saved' }))
+      .handleApi('ephemeral', () => Promise.resolve('not-saved'))
 
     // Verify the storage only contains the persisted key
     const parsed = JSON.parse(storage['rehydrate-selective'])

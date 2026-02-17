@@ -253,7 +253,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 
     handleApi: <T>(
       key: string,
-      apiCall: () => Promise<{ data: T }>,
+      apiCall: () => Promise<T>,
       options: ApiCallOptions<T> = {}
     ): Promise<T | undefined> => {
       // Merge with global config
@@ -372,21 +372,21 @@ export function createApiStore(config: ApiStoreConfig = {}) {
             }
 
             try {
-              const response = await raceWithSignal(apiCall(), opts.signal)
+              const data = await raceWithSignal(apiCall(), opts.signal)
               if (isStale()) return
               setApiState(
                 key,
                 {
                   status: FetchStatus.SUCCESS,
-                  data: response.data,
+                  data,
                   error: null,
                   fetchedAt: Date.now()
                 },
                 opts.persist
               )
-              opts.onSuccess?.(response.data)
+              opts.onSuccess?.(data)
               // Call global success handler
-              globalConfig.onSuccess?.(response.data, key)
+              globalConfig.onSuccess?.(data, key)
               return
             } catch (error) {
               if (isStale()) return

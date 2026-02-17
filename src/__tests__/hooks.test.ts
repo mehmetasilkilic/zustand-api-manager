@@ -88,3 +88,47 @@ describe('createApiStore — bound useLoadingStates', () => {
     expect(defaultResult.current).toBe(false)
   })
 })
+
+// ── prefix-aware composite key matching ──────────────────────
+
+describe('useLoadingStates — prefix-aware composite key matching', () => {
+  it('matches composite keys when given a bare endpoint name', () => {
+    useApiStore.getState().setApiState('getUser::{"id":1}', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('getUser::{"id":2}', { status: FetchStatus.SUCCESS })
+
+    const { result } = renderHook(() => useLoadingStates('getUser'))
+    expect(result.current).toBe(true)
+  })
+
+  it('returns false when no composite keys are loading', () => {
+    useApiStore.getState().setApiState('getUser::{"id":1}', { status: FetchStatus.SUCCESS })
+    useApiStore.getState().setApiState('getUser::{"id":2}', { status: FetchStatus.SUCCESS })
+
+    const { result } = renderHook(() => useLoadingStates('getUser'))
+    expect(result.current).toBe(false)
+  })
+
+  it('matches exact key even when composite keys exist', () => {
+    useApiStore.getState().setApiState('listUsers', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('getUser::{"id":1}', { status: FetchStatus.SUCCESS })
+
+    const { result } = renderHook(() => useLoadingStates('listUsers'))
+    expect(result.current).toBe(true)
+  })
+
+  it('handles array of keys with mixed bare and composite', () => {
+    useApiStore.getState().setApiState('getUser::{"id":1}', { status: FetchStatus.LOADING })
+    useApiStore.getState().setApiState('listUsers', { status: FetchStatus.SUCCESS })
+
+    const { result } = renderHook(() => useLoadingStates(['getUser', 'listUsers']))
+    expect(result.current).toBe(true)
+  })
+
+  it('does not false-match keys that share a prefix but are different endpoints', () => {
+    // "getUserPosts" should NOT match "getUser::" prefix
+    useApiStore.getState().setApiState('getUserPosts', { status: FetchStatus.LOADING })
+
+    const { result } = renderHook(() => useLoadingStates('getUser'))
+    expect(result.current).toBe(false)
+  })
+})

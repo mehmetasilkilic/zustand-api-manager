@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useApiStore } from './store'
 import {
   ApiCallOptions,
@@ -11,25 +11,25 @@ import {
   FetchStatus,
   MutationEndpointConfig
 } from './types'
-import { isApiCallOptions } from './utils'
+import { compositeKey } from './utils'
 import type { StoreApi, UseBoundStore } from 'zustand'
 
 /** Internal normalized shape for every mutation endpoint. */
 interface NormalizedMutation {
-  fn: (variables: unknown) => Promise<{ data: unknown }>
+  fn: (variables: unknown) => Promise<unknown>
   invalidates: string[]
   optimistic: Record<string, (variables: unknown, currentData: unknown) => unknown>
 }
 
 /** Normalize a bare function or MutationEndpointConfig into a consistent shape. */
 function normalizeMutation(
-  entry: ((variables: unknown) => Promise<{ data: unknown }>) | MutationEndpointConfig<any, any, any>
+  entry: ((variables: unknown) => Promise<unknown>) | MutationEndpointConfig<any, any, any>
 ): NormalizedMutation {
   if (typeof entry === 'function') {
     return { fn: entry, invalidates: [], optimistic: {} }
   }
   return {
-    fn: entry.fn as (variables: unknown) => Promise<{ data: unknown }>,
+    fn: entry.fn as (variables: unknown) => Promise<unknown>,
     invalidates: (entry.invalidates ?? []) as string[],
     optimistic: (entry.optimistic ?? {}) as Record<
       string,
@@ -97,9 +97,47 @@ export function createApiComposer<TApiStructure>(
     }
   }
 
+  // ── Void-param detection via fn.length (replaces arg sniffing) ──
+
+  const voidQueryKeys = new Set<string>()
+  if (config?.queries) {
+    for (const [k, fn] of Object.entries(config.queries)) {
+      if (fn != null && (fn as (...a: unknown[]) => unknown).length === 0) voidQueryKeys.add(k)
+    }
+  }
+
+  const voidMutationKeys = new Set<string>()
+  for (const [k, norm] of normalizedMutations) {
+    if (norm.fn.length === 0) voidMutationKeys.add(k)
+  }
+
   // ── Active query tracking (shared across all hook instances) ──
 
-  const activeQueries = new Map<string, { params: unknown }>()
+  // key = composite cache key (e.g. "getUser::{"id":1}")
+  // value = { endpoint: "getUser", params: { id: 1 } }
+  const activeQueries = new Map<string, { endpoint: string; params: unknown }>()
+
+  // key = bare endpoint name, value = set of active composite keys
+  const activeKeysByEndpoint = new Map<string, Set<string>>()
+
+  function registerActiveQuery(endpoint: string, cacheKey: string, params: unknown) {
+    activeQueries.set(cacheKey, { endpoint, params })
+    let keys = activeKeysByEndpoint.get(endpoint)
+    if (!keys) {
+      keys = new Set()
+      activeKeysByEndpoint.set(endpoint, keys)
+    }
+    keys.add(cacheKey)
+  }
+
+  function unregisterActiveQuery(endpoint: string, cacheKey: string) {
+    activeQueries.delete(cacheKey)
+    const keys = activeKeysByEndpoint.get(endpoint)
+    if (keys) {
+      keys.delete(cacheKey)
+      if (keys.size === 0) activeKeysByEndpoint.delete(endpoint)
+    }
+  }
 
   // ── Prefetch type: extracts params from query endpoints ──
 
@@ -119,11 +157,6 @@ export function createApiComposer<TApiStructure>(
   ): ApiComposerReturn<TApiStructure, K> {
     const useStore = config?.store ?? useApiStore
 
-    // Subscribe reactively to the state slice
-    const apiState = useStore(state => state.apiStates[key as string]) as
-      | ApiState<unknown>
-      | undefined
-
     // Check if this is a mutation with a pre-bound function
     const normalizedMutation = normalizedMutations.get(key as string)
     const mutationFn = normalizedMutation?.fn
@@ -132,7 +165,7 @@ export function createApiComposer<TApiStructure>(
 
     // Check if this is a query with a pre-bound function
     const queryFn = config?.queries?.[key] as
-      | ((params: unknown) => Promise<{ data: unknown }>)
+      | ((params: unknown) => Promise<unknown>)
       | undefined
 
     const queryFnRef = useRef(queryFn)
@@ -143,6 +176,12 @@ export function createApiComposer<TApiStructure>(
     const declParams = isDeclarativeMode
       ? (declarativeOptions as { params?: unknown }).params
       : undefined
+
+    // For declarative mode, compute the composite key for subscriptions
+    const declCacheKey = isDeclarativeMode
+      ? compositeKey(key as string, declParams)
+      : undefined
+
     const serializedParams = isDeclarativeMode ? JSON.stringify(declParams) : ''
     const enabled = isDeclarativeMode
       ? (declarativeOptions as { enabled?: boolean }).enabled !== false
@@ -152,12 +191,35 @@ export function createApiComposer<TApiStructure>(
     const declarativeOptionsRef = useRef(declarativeOptions)
     declarativeOptionsRef.current = declarativeOptions
 
+    // Imperative mode: track which cache key we're subscribed to
+    const [activeCacheKey, setActiveCacheKey] = useState<string>(
+      declCacheKey ?? (key as string)
+    )
+
+    // When declarative cache key changes, sync the active key
+    const prevDeclCacheKeyRef = useRef(declCacheKey)
+    if (declCacheKey != null && declCacheKey !== prevDeclCacheKeyRef.current) {
+      prevDeclCacheKeyRef.current = declCacheKey
+      if (activeCacheKey !== declCacheKey) {
+        setActiveCacheKey(declCacheKey)
+      }
+    }
+
+    // The effective key to subscribe to in the store
+    const subscriptionKey = isDeclarativeMode ? (declCacheKey ?? (key as string)) : activeCacheKey
+
+    // Subscribe reactively to the state slice using the composite key
+    const apiState = useStore(state => state.apiStates[subscriptionKey]) as
+      | ApiState<unknown>
+      | undefined
+
     // Common state accessors
     const commonState = {
       data: apiState?.data ?? null,
       status: (apiState?.status ?? FetchStatus.IDLE) as FetchStatus,
       isIdle: !apiState || apiState.status === FetchStatus.IDLE,
-      isLoading: apiState?.status === FetchStatus.LOADING,
+      isFetching: apiState?.status === FetchStatus.LOADING,
+      isLoading: apiState?.status === FetchStatus.LOADING && (apiState?.data ?? null) === null,
       isSuccess: apiState?.status === FetchStatus.SUCCESS,
       isError: apiState?.status === FetchStatus.ERROR,
       error: apiState?.error ?? null
@@ -170,12 +232,12 @@ export function createApiComposer<TApiStructure>(
           let variables: unknown
           let options: ApiCallOptions<unknown> | undefined
 
-          // For void variables: mutate(options?)
-          // For non-void variables: mutate(variables, options?)
-          if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
+          if (voidMutationKeys.has(key as string)) {
+            // void: mutate(options?)
             variables = undefined
             options = args[0] as ApiCallOptions<unknown> | undefined
           } else {
+            // params: mutate(variables, options?)
             variables = args[0]
             options = args[1] as ApiCallOptions<unknown> | undefined
           }
@@ -184,7 +246,7 @@ export function createApiComposer<TApiStructure>(
           const norm = normalizedMutations.get(key as string)!
           const { invalidates, optimistic } = norm
 
-          // ── Cross-endpoint optimistic updates ──
+          // ── Cross-endpoint optimistic updates (broadcast to composite keys) ──
           const snapshots = new Map<string, unknown>()
           const optimisticKeys = Object.keys(optimistic)
 
@@ -192,11 +254,25 @@ export function createApiComposer<TApiStructure>(
             for (const qKey of optimisticKeys) {
               const updater = optimistic[qKey]
               if (!updater) continue
-              const currentState = store.apiStates[qKey]
-              const currentData = currentState?.data ?? null
-              snapshots.set(qKey, currentData)
-              const newData = updater(variables, currentData)
-              store.setApiState(qKey, { data: newData })
+
+              // Apply to all active composite keys for this endpoint
+              const compositeKeys = activeKeysByEndpoint.get(qKey)
+              if (compositeKeys) {
+                for (const ck of compositeKeys) {
+                  const currentState = store.apiStates[ck]
+                  const currentData = currentState?.data ?? null
+                  snapshots.set(ck, currentData)
+                  const newData = updater(variables, currentData)
+                  store.setApiState(ck, { data: newData })
+                }
+              } else {
+                // Fallback: try bare key
+                const currentState = store.apiStates[qKey]
+                const currentData = currentState?.data ?? null
+                snapshots.set(qKey, currentData)
+                const newData = updater(variables, currentData)
+                store.setApiState(qKey, { data: newData })
+              }
             }
           }
 
@@ -207,29 +283,38 @@ export function createApiComposer<TApiStructure>(
           const wrappedOptions: ApiCallOptions<unknown> = {
             ...options,
             onSuccess: (data: unknown) => {
-              // Invalidate caches
+              // Invalidation — broadcast to all composite keys
               if (invalidates.length > 0) {
-                store.invalidateApis(invalidates)
+                const keysToInvalidate: string[] = [...invalidates]
 
-                // Re-trigger active declarative queries for invalidated keys
-                for (const qKey of invalidates) {
-                  const active = activeQueries.get(qKey)
-                  const boundQueryFn = config?.queries?.[qKey as keyof TApiStructure] as
-                    | ((params: unknown) => Promise<{ data: unknown }>)
-                    | undefined
-                  if (active && boundQueryFn) {
-                    store.handleApi(qKey, () => boundQueryFn(active.params))
+                for (const endpoint of invalidates) {
+                  const composites = activeKeysByEndpoint.get(endpoint)
+                  if (composites) {
+                    keysToInvalidate.push(...composites)
+
+                    // Refetch each active composite key
+                    for (const ck of composites) {
+                      const active = activeQueries.get(ck)
+                      const boundFn = config?.queries?.[endpoint as keyof TApiStructure] as
+                        | ((params: unknown) => Promise<unknown>)
+                        | undefined
+                      if (active && boundFn) {
+                        store.handleApi(ck, () => boundFn(active.params))
+                      }
+                    }
                   }
                 }
+
+                store.invalidateApis(keysToInvalidate)
               }
 
               userOnSuccess?.(data)
             },
             onError: (error) => {
-              // Rollback optimistic snapshots
+              // Rollback optimistic snapshots (using composite keys)
               if (snapshots.size > 0) {
-                for (const [qKey, previousData] of snapshots) {
-                  store.setApiState(qKey, { data: previousData })
+                for (const [ck, previousData] of snapshots) {
+                  store.setApiState(ck, { data: previousData })
                 }
               }
 
@@ -264,38 +349,45 @@ export function createApiComposer<TApiStructure>(
         let params: unknown
         let options: ApiCallOptions<unknown> | undefined
 
-        // query(params, options?) or query(options?) for void params
-        if (args.length === 0 || (args.length === 1 && isApiCallOptions(args[0]))) {
+        if (voidQueryKeys.has(key as string)) {
+          // void: query(options?)
           params = undefined
           options = args[0] as ApiCallOptions<unknown> | undefined
         } else {
+          // params: query(params, options?)
           params = args[0]
           options = args[1] as ApiCallOptions<unknown> | undefined
         }
 
+        const cacheKey = compositeKey(key as string, params)
+        setActiveCacheKey(cacheKey) // triggers re-subscription
+
         return useStore
           .getState()
-          .handleApi(key as string, () => queryFnRef.current!(params), options)
+          .handleApi(cacheKey, () => queryFnRef.current!(params), options)
       },
       [key, useStore]
     )
 
     const reset = useCallback(
-      () => useStore.getState().resetApiState(key as string),
-      [key, useStore]
+      () => useStore.getState().resetApiState(subscriptionKey),
+      [subscriptionKey, useStore]
     )
 
     const invalidate = useCallback(
-      () => useStore.getState().invalidateApi(key as string),
-      [key, useStore]
+      () => useStore.getState().invalidateApi(subscriptionKey),
+      [subscriptionKey, useStore]
     )
 
     // Declarative auto-fetch effect for query endpoints
     useEffect(() => {
       if (!isDeclarativeMode || !enabled || !queryFnRef.current) return
 
+      const params = declParams
+      const cacheKey = compositeKey(key as string, params)
+
       // Register in active queries for invalidation refetch
-      activeQueries.set(key as string, { params: declParams })
+      registerActiveQuery(key as string, cacheKey, params)
 
       const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
       const apiOptions: ApiCallOptions<unknown> = {}
@@ -308,17 +400,16 @@ export function createApiComposer<TApiStructure>(
         }
       }
 
-      const params = declParams
       useStore
         .getState()
-        .handleApi(key as string, () => queryFnRef.current!(params), apiOptions)
+        .handleApi(cacheKey, () => queryFnRef.current!(params), apiOptions)
 
       // Polling support
       const pollingInterval = (declarativeOptionsRef.current as { polling?: number } | undefined)?.polling
 
       if (pollingInterval && pollingInterval > 0) {
         const tick = () => {
-          const currentState = useStore.getState().apiStates[key as string]
+          const currentState = useStore.getState().apiStates[cacheKey]
           if (currentState?.status === FetchStatus.LOADING) return // skip if still loading
 
           const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
@@ -332,19 +423,20 @@ export function createApiComposer<TApiStructure>(
           }
 
           const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
-          useStore.getState().handleApi(key as string, () => queryFnRef.current!(currentParams), pollApiOptions)
+          const currentCacheKey = compositeKey(key as string, currentParams)
+          useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), pollApiOptions)
         }
 
         const intervalId = setInterval(tick, pollingInterval)
         return () => {
-          activeQueries.delete(key as string)
+          unregisterActiveQuery(key as string, cacheKey)
           clearInterval(intervalId)
         }
       }
 
       // Cleanup: deregister from active queries
       return () => {
-        activeQueries.delete(key as string)
+        unregisterActiveQuery(key as string, cacheKey)
       }
     }, [key, serializedParams, enabled, isDeclarativeMode, useStore])
 
@@ -362,30 +454,29 @@ export function createApiComposer<TApiStructure>(
   const prefetch: PrefetchFn = (key, ...args) => {
     const store = config?.store ?? useApiStore
     const queryFn = config?.queries?.[key] as
-      | ((params: unknown) => Promise<{ data: unknown }>)
+      | ((params: unknown) => Promise<unknown>)
       | undefined
     if (!queryFn) return Promise.resolve(undefined)
 
-    // Parse args: last arg might be options, everything before is params
     let params: unknown
     let options: Omit<ApiCallOptions<unknown>, 'onSuccess' | 'onError' | 'onSettled'> | undefined
 
-    if (args.length === 0) {
+    if (voidQueryKeys.has(key)) {
+      // void: prefetch(key, options?)
       params = undefined
-    } else if (args.length === 1) {
-      // Could be params or options — check if it looks like options
-      if (isApiCallOptions(args[0])) {
-        params = undefined
-        options = args[0] as typeof options
-      } else {
-        params = args[0]
-      }
+      options = args[0] as typeof options
+    } else if (args.length <= 1) {
+      // params only: prefetch(key, params)
+      params = args[0]
     } else {
+      // params + options: prefetch(key, params, options)
       params = args[0]
       options = args[1] as typeof options
     }
 
-    return store.getState().handleApi(key, () => queryFn(params), {
+    const cacheKey = compositeKey(key, params)
+
+    return store.getState().handleApi(cacheKey, () => queryFn(params), {
       ...options,
       onSuccess: undefined,
       onError: undefined,

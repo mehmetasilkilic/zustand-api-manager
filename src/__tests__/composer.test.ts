@@ -37,20 +37,18 @@ interface ModernApi {
 
 const mockApi = {
   getUser: vi.fn((params: { id: number }) =>
-    Promise.resolve({ data: { id: params.id, name: 'John Doe', email: 'john@example.com' } })
+    Promise.resolve({ id: params.id, name: 'John Doe', email: 'john@example.com' })
   ),
   listUsers: vi.fn(() =>
-    Promise.resolve({
-      data: [
-        { id: 1, name: 'John', email: 'john@example.com' },
-        { id: 2, name: 'Jane', email: 'jane@example.com' }
-      ]
-    })
+    Promise.resolve([
+      { id: 1, name: 'John', email: 'john@example.com' },
+      { id: 2, name: 'Jane', email: 'jane@example.com' }
+    ])
   ),
   createUser: vi.fn((payload: CreateUserPayload) =>
-    Promise.resolve({ data: { id: 3, ...payload } })
+    Promise.resolve({ id: 3, ...payload })
   ),
-  deleteUser: vi.fn(() => Promise.resolve({ data: undefined }))
+  deleteUser: vi.fn(() => Promise.resolve(undefined))
 }
 
 describe('createApiComposer — Query Endpoints (ApiQueryEndpoint)', () => {
@@ -310,7 +308,7 @@ describe('createApiComposer — robustness', () => {
     }
 
     const mockUpdate = vi.fn((_vars: { onSuccess: boolean; value: number }) =>
-      Promise.resolve({ data: { ok: true } })
+      Promise.resolve({ ok: true })
     )
 
     const useSpecialApi = createApiComposer<SpecialApi>({
@@ -555,16 +553,14 @@ describe('createApiComposer — automatic invalidation', () => {
 
   it('mutation success triggers invalidation + refetch of active declarative queries', async () => {
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [
-          { id: 1, name: 'John', email: 'john@example.com' },
-          { id: 2, name: 'Jane', email: 'jane@example.com' }
-        ]
-      })
+      Promise.resolve([
+        { id: 1, name: 'John', email: 'john@example.com' },
+        { id: 2, name: 'Jane', email: 'jane@example.com' }
+      ])
     )
 
     const createUserCall = vi.fn((payload: CreateUserPayload) =>
-      Promise.resolve({ data: { id: 3, ...payload } })
+      Promise.resolve({ id: 3, ...payload })
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -607,9 +603,7 @@ describe('createApiComposer — automatic invalidation', () => {
 
   it('invalidation does NOT happen on mutation error', async () => {
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const failingMutation = vi.fn(() => Promise.reject(new Error('Server error')))
@@ -651,17 +645,15 @@ describe('createApiComposer — automatic invalidation', () => {
 
   it('multiple invalidated keys all refetch', async () => {
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const getUserCall = vi.fn((params: { id: number }) =>
-      Promise.resolve({ data: { id: params.id, name: 'John', email: 'john@example.com' } })
+      Promise.resolve({ id: params.id, name: 'John', email: 'john@example.com' })
     )
 
     const createUserCall = vi.fn((payload: CreateUserPayload) =>
-      Promise.resolve({ data: { id: 3, ...payload } })
+      Promise.resolve({ id: 3, ...payload })
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -711,13 +703,11 @@ describe('createApiComposer — automatic invalidation', () => {
 
   it('non-active (unmounted) queries are invalidated but not refetched', async () => {
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const createUserCall = vi.fn((payload: CreateUserPayload) =>
-      Promise.resolve({ data: { id: 3, ...payload } })
+      Promise.resolve({ id: 3, ...payload })
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -793,15 +783,13 @@ describe('createApiComposer — cross-endpoint optimistic updates', () => {
   })
 
   it('optimistic data appears immediately in target query cache', async () => {
-    let resolveCreate: (value: { data: User }) => void
+    let resolveCreate: (value: User) => void
     const createUserCall = vi.fn(
-      () => new Promise<{ data: User }>(resolve => { resolveCreate = resolve })
+      (_payload: CreateUserPayload) => new Promise<User>(resolve => { resolveCreate = resolve })
     )
 
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -850,7 +838,7 @@ describe('createApiComposer — cross-endpoint optimistic updates', () => {
 
     // Resolve the mutation
     await act(async () => {
-      resolveCreate!({ data: { id: 3, name: 'Alice', email: 'alice@example.com' } })
+      resolveCreate!({ id: 3, name: 'Alice', email: 'alice@example.com' })
     })
 
     await waitFor(() => {
@@ -860,9 +848,7 @@ describe('createApiComposer — cross-endpoint optimistic updates', () => {
 
   it('rollback on mutation error restores previous data', async () => {
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const failingCreate = vi.fn(() => Promise.reject(new Error('Server error')))
@@ -921,21 +907,17 @@ describe('createApiComposer — cross-endpoint optimistic updates', () => {
     const listUsersCall = vi.fn(() => {
       callCount++
       if (callCount === 1) {
-        return Promise.resolve({
-          data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-        })
+        return Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
       }
       // After invalidation, return the server-truth including the new user
-      return Promise.resolve({
-        data: [
-          { id: 1, name: 'John', email: 'john@example.com' },
-          { id: 3, name: 'Alice', email: 'alice@example.com' }
-        ]
-      })
+      return Promise.resolve([
+        { id: 1, name: 'John', email: 'john@example.com' },
+        { id: 3, name: 'Alice', email: 'alice@example.com' }
+      ])
     })
 
     const createUserCall = vi.fn((payload: CreateUserPayload) =>
-      Promise.resolve({ data: { id: 3, ...payload } })
+      Promise.resolve({ id: 3, ...payload })
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -1000,9 +982,7 @@ describe('createApiComposer — polling', () => {
     vi.useFakeTimers()
 
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -1039,9 +1019,7 @@ describe('createApiComposer — polling', () => {
     vi.useFakeTimers()
 
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -1080,15 +1058,15 @@ describe('createApiComposer — polling', () => {
       callCount++
       if (callCount === 2) {
         // Second call is slow — takes longer than the poll interval
-        return new Promise<{ data: User[] }>(resolve => {
-          resolveCall = () => resolve({
-            data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-          })
+        return new Promise<User[]>(resolve => {
+          resolveCall = () => resolve(
+            [{ id: 1, name: 'John', email: 'john@example.com' }]
+          )
         })
       }
-      return Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      return Promise.resolve(
+        [{ id: 1, name: 'John', email: 'john@example.com' }]
+      )
     })
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -1137,9 +1115,7 @@ describe('createApiComposer — polling', () => {
     vi.useFakeTimers()
 
     const listUsersCall = vi.fn(() =>
-      Promise.resolve({
-        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
-      })
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
     )
 
     const useModernApi = createApiComposer<ModernApi>({
@@ -1193,7 +1169,7 @@ describe('createApiComposer — prefetch', () => {
 
     await useModernApi.prefetch('getUser', { id: 1 })
 
-    const state = useApiStore.getState().apiStates['getUser']
+    const state = useApiStore.getState().apiStates['getUser::{"id":1}']
     expect(state?.data).toEqual({
       id: 1,
       name: 'John Doe',
@@ -1232,10 +1208,194 @@ describe('createApiComposer — prefetch', () => {
       onError: onError as any
     } as any)
 
-    const state = useApiStore.getState().apiStates['getUser']
+    const state = useApiStore.getState().apiStates['getUser::{"id":1}']
     expect(state?.data).toBeDefined()
     // Even if someone passes callbacks, they get stripped
     expect(onSuccess).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
+  })
+})
+
+// ====================
+// Parameterized Cache Isolation
+// ====================
+
+describe('createApiComposer — parameterized cache isolation', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('different params produce different cache entries', async () => {
+    const getUserCall = vi.fn((params: { id: number }) =>
+      Promise.resolve({ id: params.id, name: `User ${params.id}`, email: `user${params.id}@test.com` })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { getUser: getUserCall }
+    })
+
+    // Mount two hooks with different params
+    const { result: result1 } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 1 } })
+    )
+    const { result: result2 } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 2 } })
+    )
+
+    await waitFor(() => {
+      expect(result1.current.isSuccess).toBe(true)
+      expect(result2.current.isSuccess).toBe(true)
+    })
+
+    // Data should be isolated
+    expect(result1.current.data).toEqual({ id: 1, name: 'User 1', email: 'user1@test.com' })
+    expect(result2.current.data).toEqual({ id: 2, name: 'User 2', email: 'user2@test.com' })
+
+    // Both should have been called
+    expect(getUserCall).toHaveBeenCalledTimes(2)
+
+    // Store should have two different keys
+    const states = useApiStore.getState().apiStates
+    expect(states['getUser::{"id":1}']).toBeDefined()
+    expect(states['getUser::{"id":2}']).toBeDefined()
+    expect(states['getUser::{"id":1}']?.data).toEqual({ id: 1, name: 'User 1', email: 'user1@test.com' })
+    expect(states['getUser::{"id":2}']?.data).toEqual({ id: 2, name: 'User 2', email: 'user2@test.com' })
+  })
+
+  it('void-param queries use bare key', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: mockApi.listUsers }
+    })
+
+    const { result } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    // Should use bare key (no params = no :: suffix)
+    const states = useApiStore.getState().apiStates
+    expect(states['listUsers']).toBeDefined()
+    expect(states['listUsers']?.data).toHaveLength(2)
+  })
+
+  it('invalidation broadcasts to all composite keys', async () => {
+    const getUserCall = vi.fn((params: { id: number }) =>
+      Promise.resolve({ id: params.id, name: `User ${params.id}`, email: `user${params.id}@test.com` })
+    )
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ id: 3, ...payload })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { getUser: getUserCall },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['getUser']
+        }
+      }
+    })
+
+    // Mount two queries with different params
+    const { result: result1 } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 1 } })
+    )
+    const { result: result2 } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 2 } })
+    )
+
+    await waitFor(() => {
+      expect(result1.current.isSuccess).toBe(true)
+      expect(result2.current.isSuccess).toBe(true)
+    })
+
+    expect(getUserCall).toHaveBeenCalledTimes(2)
+
+    // Perform mutation that invalidates getUser
+    const { result: mutResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutResult.current.mutate({ name: 'Alice', email: 'alice@test.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutResult.current.isSuccess).toBe(true)
+    })
+
+    // Both composite keys should have been refetched
+    await waitFor(() => {
+      expect(getUserCall).toHaveBeenCalledTimes(4) // 2 initial + 2 invalidation refetches
+    })
+  })
+})
+
+// ====================
+// isFetching vs isLoading
+// ====================
+
+describe('createApiComposer — isFetching vs isLoading', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('isFetching is true during any fetch, isLoading only on first load', async () => {
+    let resolveCall: ((value: User[]) => void) | undefined
+    let callCount = 0
+    const listUsersCall = vi.fn(() => {
+      callCount++
+      return new Promise<User[]>(resolve => {
+        resolveCall = resolve
+      })
+    })
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result } = renderHook(() => useModernApi('listUsers', {}))
+
+    // During first load: both isFetching and isLoading should be true
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(true)
+    })
+    expect(result.current.isLoading).toBe(true)
+    expect(result.current.data).toBeNull()
+
+    // Resolve first call
+    await act(async () => {
+      resolveCall!([{ id: 1, name: 'John', email: 'john@test.com' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(result.current.isFetching).toBe(false)
+    expect(result.current.isLoading).toBe(false)
+
+    // Trigger a refetch imperatively
+    act(() => {
+      result.current.query()
+    })
+
+    // During refetch: isFetching = true, but isLoading = false (data exists)
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(true)
+    })
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.data).not.toBeNull()
+
+    // Resolve second call
+    await act(async () => {
+      resolveCall!([{ id: 1, name: 'John', email: 'john@test.com' }, { id: 2, name: 'Jane', email: 'jane@test.com' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(false)
+    })
+    expect(result.current.isLoading).toBe(false)
   })
 })
