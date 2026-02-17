@@ -26,10 +26,10 @@ interface FeatureApi {
 }
 
 const api = {
-  getFeatureData: async (params: { id: number }): Promise<{ data: FeatureData }> => {
+  getFeatureData: async (params: { id: number }): Promise<FeatureData> => {
     const response = await fetch(`/api/features/${params.id}`)
-    const data = await response.json()
-    return { data }
+    if (!response.ok) throw new Error('Failed to fetch feature')
+    return response.json()
   }
 }
 

@@ -37,34 +37,30 @@ interface Comment {
 // Simulated APIs --------------------------------------------------------------
 
 const fetchUser = (id: number) =>
-  new Promise<{ data: User }>(resolve => {
-    setTimeout(() => resolve({ data: { id, username: 'mobile-user' } }), 800)
+  new Promise<User>(resolve => {
+    setTimeout(() => resolve({ id, username: 'mobile-user' }), 800)
   })
 
 const fetchPosts = () =>
-  new Promise<{ data: Post[] }>(resolve => {
+  new Promise<Post[]>(resolve => {
     setTimeout(
       () =>
-        resolve({
-          data: [
-            { id: 1, title: 'Hello from React Native' },
-            { id: 2, title: 'Zustand API Manager in RN' }
-          ]
-        }),
+        resolve([
+          { id: 1, title: 'Hello from React Native' },
+          { id: 2, title: 'Zustand API Manager in RN' }
+        ]),
       1200
     )
   })
 
 const fetchComments = () =>
-  new Promise<{ data: Comment[] }>(resolve => {
+  new Promise<Comment[]>(resolve => {
     setTimeout(
       () =>
-        resolve({
-          data: [
-            { id: 1, body: 'Great post!' },
-            { id: 2, body: 'Very useful, thanks.' }
-          ]
-        }),
+        resolve([
+          { id: 1, body: 'Great post!' },
+          { id: 2, body: 'Very useful, thanks.' }
+        ]),
       1000
     )
   })
@@ -102,8 +98,8 @@ const useApi = createApiComposer<DefaultApiStructure>({
   mutations: {
     createPost: {
       fn: (payload) =>
-        new Promise(resolve =>
-          setTimeout(() => resolve({ data: { id: Date.now(), title: payload.title } }), 500)
+        new Promise<Post>(resolve =>
+          setTimeout(() => resolve({ id: Date.now(), title: payload.title }), 500)
         ),
       invalidates: ['getPosts'],
       optimistic: {
@@ -405,7 +401,7 @@ const App: React.FC = () => {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Zustand API Manager — Composer-Only</Text>
+        <Text style={styles.title}>Zustand API Manager — Composer Example</Text>
         <Text style={styles.subtitle}>
           Declarative auto-fetching, polling, mutations with invalidation,
           two isolated stores proving store isolation.

@@ -1,117 +1,101 @@
 # Examples
 
-This directory contains practical examples of using `zustand-api-manager` in real-world scenarios.
+This directory contains practical examples of using `zustand-api-manager` v2.
+
+All examples use `createApiComposer` — the recommended way to define and consume APIs.
 
 ## Available Examples
 
 ### 1. Basic Usage (`basic/`)
-Simple example showing:
-- Declarative auto-fetch with `useApiQuery` and `queryFn`
-- Loading states
-- Error handling
+Simple single-query example showing:
+- `createApiComposer` with a typed `ApiQueryEndpoint`
+- Declarative auto-fetch with `params`
+- Loading & error states
 - Cache with `staleTime`
 - Persistence
 - Retry logic
 
-### 2. Authentication (`authentication/`)
+### 2. Composer Modern (`composer-modern/`)
+Full-featured example covering:
+- `createApiComposer` with multiple query and mutation endpoints
+- Declarative auto-fetch with param changes
+- Imperative `query()` calls (button click)
+- Mutations with `invalidates` and `optimistic` updates
+- Delete with optimistic removal
+- Bare function mutations (no auto-invalidation)
+
+### 3. Authentication (`authentication/`)
 Login flow demonstrating:
-- Using `useApiMutation` for POST requests
-- Form handling
-- Token storage
+- Composer mutation for POST requests
+- Form handling with `mutate()`
+- `onSuccess` / `onError` callbacks
 - Logout with `resetAll()`
-- Error feedback
 
-### 3. File Upload (`file-upload/`)
-File upload with progress showing:
-- File upload with `useApiMutation`
+### 4. File Upload (`file-upload/`)
+File upload showing:
+- Mutation with `AbortSignal` for cancellation
 - Timeout handling
-- AbortController for cancellation
+- Error code checks (`TIMEOUT`, `ABORT_ERR`)
 - Success/error feedback
-- Reset after upload
 
-### 4. Polling (`polling/`)
-Real-time notifications using:
-- `usePolling` hook
-- Conditional polling with `enabled` option
-- Immediate fetch with `immediate` option
-- Unread count badge
-- Stop polling when viewing
+### 5. Polling (`polling/`)
+Notification bell with real-time updates:
+- `polling: 10_000` declarative option
+- Conditional polling with `enabled`
+- `staleTime` to avoid redundant fetches
+- Pause polling while reading notifications
 
-### 5. Multiple Stores (`multiple-stores/`)
+### 6. Multiple Stores (`multiple-stores/`)
 Isolated feature module with:
-- `createApiStore` for isolation
-- Declarative auto-fetch with `queryFn`
+- `createApiStore()` for store isolation
+- Pre-bound `createApiComposer` and `useLoadingStates`
+- `useApi.prefetch()` for preloading on hover
 - DevTools integration
-- Prefetching
-- Independent state management
 - Feature-specific persistence
 
-### 6. Composer Modern (`composer-modern/`)
-Full composer example with:
-- `createApiComposer` with query and mutation endpoints
-- Declarative auto-fetch with `params`
-- Observer mode (read-only)
-- Imperative `query()` and `mutate()` calls
-- Type-safe API structure
+### 7. Basic React (`basic-react/`)
+Runnable Vite app combining all patterns:
+- Declarative queries, imperative queries, polling
+- Mutations with invalidation and optimistic updates
+- Two isolated stores proving store isolation
+- `useLoadingStates` for global and per-store loading indicators
+- Prefetch on hover
+- Bulk operations (`resetAll`, `invalidateAll`)
 
-## Running Examples
+### 8. React Native (`react-native/`)
+Same patterns adapted for React Native:
+- Native `View`, `Text`, `Button`, `ActivityIndicator` components
+- Two isolated stores with `createApiStore`
+- All composer features (declarative, imperative, polling, mutations)
+- Global and per-store loading banners
 
-Each example is a standalone React component. To use them:
+## Running the Runnable Example
 
-1. Install dependencies:
+The `basic-react/` example is a complete Vite app:
+
 ```bash
-npm install react react-dom zustand-api-manager
+cd examples/basic-react
+npm install
+npm run dev
 ```
 
-2. Import and use in your app:
+The other examples are standalone components. Import them into any React app:
+
 ```tsx
 import BasicExample from './examples/basic/App'
 import LoginForm from './examples/authentication/LoginForm'
-// etc.
-
-function App() {
-  return (
-    <div>
-      <BasicExample />
-      <LoginForm />
-    </div>
-  )
-}
 ```
 
-## Key Patterns Demonstrated
+## Key Patterns
 
-- **Declarative Mode**: Use `queryFn` with `useApiQuery` or `params` with composer for auto-fetching
-- **Observer Mode**: Use `useApiQuery(key)` without options to read data fetched elsewhere
-- **Imperative Mode**: Use `query()` for user-triggered fetches (e.g., button clicks)
-- **Mutations**: Use `useApiMutation` or composer mutations for writes (POST/PUT/DELETE)
-- **Caching**: Use `staleTime` to avoid redundant fetches
-- **Polling**: Use `usePolling` for real-time updates
-- **Prefetching**: Use `usePrefetch` for optimistic loading
-- **Isolation**: Use `createApiStore` for feature modules
-- **Global state**: Use singleton store for shared data
-- **Cancellation**: Use AbortController for user cancellations
-- **Timeout**: Set `timeout` for slow requests
-- **Retry**: Use `retry` with `shouldRetry` for transient failures
-
-## Best Practices
-
-1. **Prefer declarative mode**: Use `queryFn` for most queries to avoid `useEffect` boilerplate
-2. **Use observer mode**: For components that only read data fetched elsewhere
-3. **Use stable keys**: Use consistent key names across your app
-4. **Set appropriate staleTime**: Balance freshness with performance
-5. **Handle errors**: Always provide onError callbacks
-6. **Clean up**: Use `reset()` when appropriate
-7. **Prefetch on hover**: Improve perceived performance
-8. **Isolate features**: Use separate stores for independent modules
-9. **Enable DevTools**: Use `enableDevtools` during development
-
-## API Endpoints
-
-These examples use placeholder endpoints. Replace with your actual API:
-- `/api/login` - Authentication endpoint
-- `/api/upload` - File upload endpoint
-- `/api/notifications` - Notifications endpoint
-- `/api/features/:id` - Feature data endpoint
-
-Or use a mock API service like JSONPlaceholder for testing.
+- **Declarative mode**: Pass `params` (or `{}` for void queries) to auto-fetch on mount and refetch on param changes
+- **Imperative mode**: Omit the second argument, call `query(params)` or `mutate(vars)` manually
+- **Cache invalidation**: Define `invalidates: ['listUsers']` on mutations to auto-refetch active queries
+- **Optimistic updates**: Define `optimistic: { listUsers: (vars, current) => [...] }` for instant UI
+- **Polling**: Add `polling: 10_000` to any declarative query
+- **Prefetch**: Call `useApi.prefetch('getUser', { id: 2 })` outside of render
+- **Store isolation**: Use `createApiStore()` for independent per-feature stores
+- **Global loading**: Use `useLoadingStates()` or the bound `store.useLoadingStates()`
+- **Cancellation**: Pass `signal` from an `AbortController`, or use `cancelRequest()` / `cancelAll()`
+- **Timeout**: Set `timeout: 30000` to auto-abort slow requests
+- **Retry**: Set `retry: 3` with optional `shouldRetry` for conditional retries

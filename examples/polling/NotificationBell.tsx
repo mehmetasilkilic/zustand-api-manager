@@ -9,10 +9,10 @@ interface Notification {
 }
 
 const api = {
-  getNotifications: async (): Promise<{ data: Notification[] }> => {
+  getNotifications: async (): Promise<Notification[]> => {
     const response = await fetch('/api/notifications')
-    const data = await response.json()
-    return { data }
+    if (!response.ok) throw new Error('Failed to fetch notifications')
+    return response.json()
   }
 }
 

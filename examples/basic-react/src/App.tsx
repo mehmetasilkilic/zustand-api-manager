@@ -27,34 +27,30 @@ interface Comment {
 // Simulated APIs --------------------------------------------------------------
 
 const fetchUser = (id: number) =>
-  new Promise<{ data: User }>(resolve => {
-    setTimeout(() => resolve({ data: { id, username: 'johndoe' } }), 800)
+  new Promise<User>(resolve => {
+    setTimeout(() => resolve({ id, username: 'johndoe' }), 800)
   })
 
 const fetchPosts = () =>
-  new Promise<{ data: Post[] }>(resolve => {
+  new Promise<Post[]>(resolve => {
     setTimeout(
       () =>
-        resolve({
-          data: [
-            { id: 1, title: 'Hello Zustand' },
-            { id: 2, title: 'Managing API state' }
-          ]
-        }),
+        resolve([
+          { id: 1, title: 'Hello Zustand' },
+          { id: 2, title: 'Managing API state' }
+        ]),
       1200
     )
   })
 
 const fetchComments = () =>
-  new Promise<{ data: Comment[] }>(resolve => {
+  new Promise<Comment[]>(resolve => {
     setTimeout(
       () =>
-        resolve({
-          data: [
-            { id: 1, body: 'Great post!' },
-            { id: 2, body: 'Very useful, thanks.' }
-          ]
-        }),
+        resolve([
+          { id: 1, body: 'Great post!' },
+          { id: 2, body: 'Very useful, thanks.' }
+        ]),
       1000
     )
   })
@@ -92,8 +88,8 @@ const useApi = createApiComposer<DefaultApiStructure>({
   mutations: {
     createPost: {
       fn: (payload) =>
-        new Promise(resolve =>
-          setTimeout(() => resolve({ data: { id: Date.now(), title: payload.title } }), 500)
+        new Promise<Post>(resolve =>
+          setTimeout(() => resolve({ id: Date.now(), title: payload.title }), 500)
         ),
       invalidates: ['getPosts'],
       optimistic: {
@@ -366,7 +362,7 @@ export const App: React.FC = () => {
     >
       <header style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0 }}>Zustand API Manager — Composer-Only Example</h1>
+          <h1 style={{ margin: 0 }}>Zustand API Manager — Composer Example</h1>
           <p style={{ marginTop: 8 }}>
             Declarative auto-fetching, polling, prefetch, mutations with invalidation,
             two isolated stores, and <code>useLoadingStates</code>.

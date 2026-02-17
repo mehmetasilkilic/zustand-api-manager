@@ -46,38 +46,46 @@ let mockUsers: User[] = [
   { id: 3, name: 'Bob Johnson', email: 'bob@example.com' }
 ]
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
 const api = {
-  getUser: async (params: { id: number }) => {
-    await new Promise(resolve => setTimeout(resolve, 500))
-    const user = mockUsers.find(u => u.id === params.id)
-    return {
-      data: user ?? { id: params.id, name: `User ${params.id}`, email: `user${params.id}@example.com` }
-    }
+  getUser: async (params: { id: number }): Promise<User> => {
+    await delay(500)
+    return (
+      mockUsers.find(u => u.id === params.id) ?? {
+        id: params.id,
+        name: `User ${params.id}`,
+        email: `user${params.id}@example.com`
+      }
+    )
   },
 
-  listUsers: async () => {
-    await new Promise(resolve => setTimeout(resolve, 500))
-    return { data: [...mockUsers] }
+  listUsers: async (): Promise<User[]> => {
+    await delay(500)
+    return [...mockUsers]
   },
 
-  createUser: async (payload: CreateUserPayload) => {
-    await new Promise(resolve => setTimeout(resolve, 800))
+  createUser: async (payload: CreateUserPayload): Promise<User> => {
+    await delay(800)
     const newUser = { id: Date.now(), ...payload }
     mockUsers = [...mockUsers, newUser]
-    return { data: newUser }
+    return newUser
   },
 
-  updateUser: async (params: { id: number; data: UpdateUserPayload }) => {
-    await new Promise(resolve => setTimeout(resolve, 500))
-    const updated = { id: params.id, name: 'Updated User', email: 'updated@example.com', ...params.data }
+  updateUser: async (params: { id: number; data: UpdateUserPayload }): Promise<User> => {
+    await delay(500)
+    const updated = {
+      id: params.id,
+      name: params.data.name ?? 'Updated User',
+      email: params.data.email ?? 'updated@example.com'
+    }
     mockUsers = mockUsers.map(u => (u.id === params.id ? { ...u, ...updated } : u))
-    return { data: updated }
+    return updated
   },
 
-  deleteUser: async (params: { id: number }) => {
-    await new Promise(resolve => setTimeout(resolve, 500))
+  deleteUser: async (params: { id: number }): Promise<void> => {
+    await delay(500)
     mockUsers = mockUsers.filter(u => u.id !== params.id)
-    return { data: undefined }
   }
 }
 
@@ -110,7 +118,7 @@ const useApi = createApiComposer<MyApi>({
         listUsers: (vars, current) => (current ?? []).filter(u => u.id !== vars.id)
       }
     },
-    // updateUser: bare function (no invalidation — backward compat demo)
+    // updateUser: bare function (no invalidation)
     updateUser: api.updateUser
   }
 })
@@ -311,7 +319,7 @@ function UpdateUserForm() {
     >
       <h3>Update User (Bare Function — No Auto-Invalidation)</h3>
       <p style={{ fontSize: '12px', color: '#666' }}>
-        This mutation uses a bare function (backward compat). No automatic invalidation.
+        This mutation uses a bare function. No automatic invalidation.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -385,7 +393,7 @@ export default function App() {
             <code>optimistic</code> — the user disappears instantly, then server confirms
           </li>
           <li>
-            <strong>updateUser</strong> uses a bare function (backward compat) — no auto-invalidation
+            <strong>updateUser</strong> uses a bare function — no auto-invalidation
           </li>
           <li>
             If a mutation <strong>fails</strong>, optimistic data rolls back automatically

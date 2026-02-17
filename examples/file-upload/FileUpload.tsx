@@ -7,7 +7,7 @@ interface UploadResponse {
 }
 
 const api = {
-  uploadFile: async (file: File): Promise<{ data: UploadResponse }> => {
+  uploadFile: async (file: File): Promise<UploadResponse> => {
     const formData = new FormData()
     formData.append('file', file)
 
@@ -17,8 +17,7 @@ const api = {
     })
 
     if (!response.ok) throw new Error('Upload failed')
-    const data = await response.json()
-    return { data }
+    return response.json()
   }
 }
 
