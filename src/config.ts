@@ -82,6 +82,9 @@ export function resetGlobalConfig(): void {
 /**
  * Merge global defaults with call-specific options.
  * Call options always take precedence over global defaults.
+ * Global lifecycle callbacks (onSuccess, onError, onSettled) are
+ * invoked directly by the store with the API key — they are not
+ * merged here.
  * Internal use only.
  */
 export function mergeWithGlobalConfig<T>(options: ApiCallOptions<T> = {}): ApiCallOptions<T> {
@@ -92,31 +95,6 @@ export function mergeWithGlobalConfig<T>(options: ApiCallOptions<T> = {}): ApiCa
     staleTime: options.staleTime !== undefined ? options.staleTime : config.defaultStaleTime,
     timeout: options.timeout !== undefined ? options.timeout : config.defaultTimeout,
     dedupe: options.dedupe !== undefined ? options.dedupe : config.defaultDedupe,
-    ...options,
-    // Wrap callbacks to include global handlers
-    onSuccess:
-      options.onSuccess || config.onSuccess
-        ? (data: T) => {
-            options.onSuccess?.(data)
-            // Key will be injected by the store
-            // config.onSuccess?.(data, key)
-          }
-        : undefined,
-    onError:
-      options.onError || config.onError
-        ? (error: ApiError) => {
-            options.onError?.(error)
-            // Key will be injected by the store
-            // config.onError?.(error, key)
-          }
-        : undefined,
-    onSettled:
-      options.onSettled || config.onSettled
-        ? () => {
-            options.onSettled?.()
-            // Key will be injected by the store
-            // config.onSettled?.(key)
-          }
-        : undefined
+    ...options
   }
 }

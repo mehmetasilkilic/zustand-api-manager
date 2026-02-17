@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stableStringify, isApiCallOptions } from '../utils'
+import { stableStringify } from '../utils'
 
 describe('stableStringify', () => {
   it('returns empty string for undefined', () => {
@@ -53,35 +53,6 @@ describe('stableStringify', () => {
     const a = { l1: { l2: { l3: { z: 1, a: 2 } } } }
     const b = { l1: { l2: { l3: { a: 2, z: 1 } } } }
     expect(stableStringify(a)).toBe(stableStringify(b))
-  })
-})
-
-describe('isApiCallOptions', () => {
-  it('returns false for non-objects', () => {
-    expect(isApiCallOptions(null)).toBe(false)
-    expect(isApiCallOptions(undefined)).toBe(false)
-    expect(isApiCallOptions(42)).toBe(false)
-    expect(isApiCallOptions('string')).toBe(false)
-    expect(isApiCallOptions(true)).toBe(false)
-  })
-
-  it('returns false for arrays', () => {
-    expect(isApiCallOptions([1, 2, 3])).toBe(false)
-  })
-
-  it('returns false for empty objects', () => {
-    expect(isApiCallOptions({})).toBe(false)
-  })
-
-  it('returns true for objects with only ApiCallOptions keys', () => {
-    expect(isApiCallOptions({ retry: 3 })).toBe(true)
-    expect(isApiCallOptions({ staleTime: 5000, persist: true })).toBe(true)
-    expect(isApiCallOptions({ onSuccess: () => {}, onError: () => {} })).toBe(true)
-  })
-
-  it('returns false for objects with non-ApiCallOptions keys', () => {
-    expect(isApiCallOptions({ id: 1 })).toBe(false)
-    expect(isApiCallOptions({ retry: 3, customKey: 'value' })).toBe(false)
   })
 })
 

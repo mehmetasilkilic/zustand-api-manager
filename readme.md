@@ -101,7 +101,6 @@ function CreateUserForm() {
 - [Configuration & Options](#configuration--options)
 - [Middleware & Error Handling](#middleware--error-handling)
 - [Store API Reference](#store-api-reference)
-- [Comparison](#comparison)
 - [Migration from TanStack Query / SWR / RTK Query](#migration-from-tanstack-query--swr--rtk-query)
 - [Performance](#performance)
 - [TypeScript Support](#typescript-support)
@@ -580,29 +579,6 @@ const {
   enableDevtools: true,
 });
 ```
-
-## Comparison
-
-| Feature | Zustand API Manager | React Query | SWR | RTK Query |
-|---------|:------------------:|:-----------:|:---:|:---------:|
-| Bundle Size (gzip) | ~10KB | ~40KB | ~12KB | ~35KB |
-| TypeScript | Yes | Yes | Yes | Yes |
-| Queries + Mutations | Yes | Yes | Partial | Yes |
-| Caching + staleTime | Yes | Yes | Yes | Yes |
-| Polling | Yes | Yes | Yes | Yes |
-| Retry + Backoff | Yes | Yes | Yes | Yes |
-| Optimistic Updates | Yes | Yes | Yes | Yes |
-| Prefetch | Yes | Yes | Yes | Yes |
-| **Composer (one hook for entire API)** | **Yes** | No | No | Partial |
-| **Declarative invalidation** | **Yes** | No | No | Tags (less flexible) |
-| **Cross-endpoint optimistic** | **Yes** | Manual | Manual | Manual |
-| **Multi-store isolation** | **Yes** | Partial | No | No |
-| Infinite Queries | Yes | Yes | No | No |
-| Refetch on Focus / Reconnect | Yes | Yes | Yes | Yes |
-| Garbage Collection | Yes | Yes | No | Yes |
-| Deduplication | Yes | Yes | Yes | Yes |
-| DevTools | Yes | Yes | No | Yes |
-| Learning Curve | Easy | Medium | Easy | Hard |
 
 ## Migration from TanStack Query / SWR / RTK Query
 
