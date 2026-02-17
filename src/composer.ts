@@ -116,7 +116,9 @@ export function createApiComposer<TApiStructure>(
   if (config?.mutations) {
     for (const [k, entry] of Object.entries(config.mutations)) {
       if (entry != null) {
-        normalizedMutations.set(k, normalizeMutation(entry as any))
+        normalizedMutations.set(k, normalizeMutation(
+          entry as ((variables: unknown) => Promise<unknown>) | MutationEndpointConfig<TApiStructure, unknown, unknown>
+        ))
       }
     }
   }
@@ -153,6 +155,7 @@ export function createApiComposer<TApiStructure>(
     endpoint: string
     params: unknown
     gcTime: number
+    refCount: number
     refetchFn?: () => Promise<unknown>
   }>()
 
@@ -176,7 +179,14 @@ export function createApiComposer<TApiStructure>(
       gcTimers.delete(cacheKey)
     }
 
-    activeQueries.set(cacheKey, { endpoint, params, gcTime, refetchFn })
+    const existing = activeQueries.get(cacheKey)
+    if (existing) {
+      existing.refCount++
+      existing.refetchFn = refetchFn
+    } else {
+      activeQueries.set(cacheKey, { endpoint, params, gcTime, refCount: 1, refetchFn })
+    }
+
     let keys = activeKeysByEndpoint.get(endpoint)
     if (!keys) {
       keys = new Set()
@@ -187,6 +197,11 @@ export function createApiComposer<TApiStructure>(
 
   function unregisterActiveQuery(endpoint: string, cacheKey: string) {
     const entry = activeQueries.get(cacheKey)
+    if (entry) {
+      entry.refCount--
+      if (entry.refCount > 0) return // Other components still using this query
+    }
+
     activeQueries.delete(cacheKey)
     const keys = activeKeysByEndpoint.get(endpoint)
     if (keys) {
@@ -213,6 +228,121 @@ export function createApiComposer<TApiStructure>(
     const global = getGlobalConfig().defaultGcTime
     if (global != null) return global
     return DEFAULT_GC_TIME
+  }
+
+  /** Setup focus/reconnect subscriptions based on declarative options. */
+  function setupFocusReconnect(
+    refetchFn: () => void,
+    opts: Record<string, unknown> | undefined
+  ): (() => void)[] {
+    const cleanups: (() => void)[] = []
+    const globalCfg = getGlobalConfig()
+    if ((opts?.refetchOnWindowFocus as boolean | undefined) ?? globalCfg.defaultRefetchOnWindowFocus) {
+      cleanups.push(onWindowFocus(refetchFn))
+    }
+    if ((opts?.refetchOnReconnect as boolean | undefined) ?? globalCfg.defaultRefetchOnReconnect) {
+      cleanups.push(onReconnect(refetchFn))
+    }
+    return cleanups
+  }
+
+  /** Execute a mutation with optimistic updates, invalidation, and rollback. */
+  function executeMutation(
+    useStore: UseBoundStore<StoreApi<ApiStore>>,
+    key: string,
+    variables: unknown,
+    options: ApiCallOptions<unknown> | undefined,
+    mutationFnRef: { current: ((variables: unknown) => Promise<unknown>) | undefined }
+  ) {
+    const store = useStore.getState()
+    const norm = normalizedMutations.get(key)!
+    const { invalidates, optimistic } = norm
+
+    // ── Cross-endpoint optimistic updates (broadcast to composite keys) ──
+    const snapshots = new Map<string, unknown>()
+    const optimisticKeys = Object.keys(optimistic)
+
+    if (optimisticKeys.length > 0) {
+      for (const qKey of optimisticKeys) {
+        const updater = optimistic[qKey]
+        if (!updater) continue
+
+        const compositeKeys = activeKeysByEndpoint.get(qKey)
+        if (compositeKeys) {
+          for (const ck of compositeKeys) {
+            const currentState = store.apiStates[ck]
+            const currentData = currentState?.data ?? null
+            snapshots.set(ck, currentData)
+            const newData = updater(variables, currentData)
+            store.setApiState(ck, { data: newData })
+          }
+        } else {
+          const currentState = store.apiStates[qKey]
+          const currentData = currentState?.data ?? null
+          snapshots.set(qKey, currentData)
+          const newData = updater(variables, currentData)
+          store.setApiState(qKey, { data: newData })
+        }
+      }
+    }
+
+    // ── Execute the mutation via handleApi ──
+    const userOnSuccess = options?.onSuccess
+    const userOnError = options?.onError
+
+    const wrappedOptions: ApiCallOptions<unknown> = {
+      ...options,
+      onSuccess: (data: unknown) => {
+        if (invalidates.length > 0) {
+          const keysToInvalidate: string[] = [...invalidates]
+
+          for (const endpoint of invalidates) {
+            const composites = activeKeysByEndpoint.get(endpoint)
+            if (composites) {
+              keysToInvalidate.push(...composites)
+            }
+          }
+
+          store.invalidateApis(keysToInvalidate)
+
+          for (const endpoint of invalidates) {
+            const composites = activeKeysByEndpoint.get(endpoint)
+            if (composites) {
+              for (const ck of composites) {
+                const active = activeQueries.get(ck)
+                if (active?.refetchFn) {
+                  active.refetchFn()
+                } else {
+                  const boundFn = config?.queries?.[endpoint as keyof TApiStructure] as
+                    | ((params: unknown) => Promise<unknown>)
+                    | undefined
+                  if (active && boundFn) {
+                    store.handleApi(ck, () => boundFn(active.params))
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        userOnSuccess?.(data)
+      },
+      onError: (error) => {
+        if (snapshots.size > 0) {
+          for (const [ck, previousData] of snapshots) {
+            store.setApiState(ck, { data: previousData })
+          }
+        }
+
+        userOnError?.(error)
+      }
+    }
+
+    return store.handleApi(
+      key,
+      () => mutationFnRef.current!(variables),
+      wrappedOptions
+    )
   }
 
   // ── Prefetch type: extracts params from query endpoints ──
@@ -322,105 +452,14 @@ export function createApiComposer<TApiStructure>(
           let options: ApiCallOptions<unknown> | undefined
 
           if (voidMutationKeys.has(key as string)) {
-            // void: mutate(options?)
             variables = undefined
             options = args[0] as ApiCallOptions<unknown> | undefined
           } else {
-            // params: mutate(variables, options?)
             variables = args[0]
             options = args[1] as ApiCallOptions<unknown> | undefined
           }
 
-          const store = useStore.getState()
-          const norm = normalizedMutations.get(key as string)!
-          const { invalidates, optimistic } = norm
-
-          // ── Cross-endpoint optimistic updates (broadcast to composite keys) ──
-          const snapshots = new Map<string, unknown>()
-          const optimisticKeys = Object.keys(optimistic)
-
-          if (optimisticKeys.length > 0) {
-            for (const qKey of optimisticKeys) {
-              const updater = optimistic[qKey]
-              if (!updater) continue
-
-              // Apply to all active composite keys for this endpoint
-              const compositeKeys = activeKeysByEndpoint.get(qKey)
-              if (compositeKeys) {
-                for (const ck of compositeKeys) {
-                  const currentState = store.apiStates[ck]
-                  const currentData = currentState?.data ?? null
-                  snapshots.set(ck, currentData)
-                  const newData = updater(variables, currentData)
-                  store.setApiState(ck, { data: newData })
-                }
-              } else {
-                // Fallback: try bare key
-                const currentState = store.apiStates[qKey]
-                const currentData = currentState?.data ?? null
-                snapshots.set(qKey, currentData)
-                const newData = updater(variables, currentData)
-                store.setApiState(qKey, { data: newData })
-              }
-            }
-          }
-
-          // ── Execute the mutation via handleApi ──
-          const userOnSuccess = options?.onSuccess
-          const userOnError = options?.onError
-
-          const wrappedOptions: ApiCallOptions<unknown> = {
-            ...options,
-            onSuccess: (data: unknown) => {
-              // Invalidation — broadcast to all composite keys
-              if (invalidates.length > 0) {
-                const keysToInvalidate: string[] = [...invalidates]
-
-                for (const endpoint of invalidates) {
-                  const composites = activeKeysByEndpoint.get(endpoint)
-                  if (composites) {
-                    keysToInvalidate.push(...composites)
-
-                    // Refetch each active composite key
-                    for (const ck of composites) {
-                      const active = activeQueries.get(ck)
-                      if (active?.refetchFn) {
-                        // Use stored refetchFn (handles both regular and infinite queries)
-                        active.refetchFn()
-                      } else {
-                        const boundFn = config?.queries?.[endpoint as keyof TApiStructure] as
-                          | ((params: unknown) => Promise<unknown>)
-                          | undefined
-                        if (active && boundFn) {
-                          store.handleApi(ck, () => boundFn(active.params))
-                        }
-                      }
-                    }
-                  }
-                }
-
-                store.invalidateApis(keysToInvalidate)
-              }
-
-              userOnSuccess?.(data)
-            },
-            onError: (error) => {
-              // Rollback optimistic snapshots (using composite keys)
-              if (snapshots.size > 0) {
-                for (const [ck, previousData] of snapshots) {
-                  store.setApiState(ck, { data: previousData })
-                }
-              }
-
-              userOnError?.(error)
-            }
-          }
-
-          return store.handleApi(
-            key as string,
-            () => mutationFnRef.current!(variables),
-            wrappedOptions
-          )
+          return executeMutation(useStore, key as string, variables, options, mutationFnRef)
         },
         [key, useStore]
       )
@@ -511,16 +550,24 @@ export function createApiComposer<TApiStructure>(
         initialFetch()
 
         // Focus/reconnect subscriptions
-        const cleanups: (() => void)[] = []
-        const globalCfg = getGlobalConfig()
-        const refetchOnFocus = (opts?.refetchOnWindowFocus as boolean | undefined) ?? globalCfg.defaultRefetchOnWindowFocus
-        const refetchOnReconnectOpt = (opts?.refetchOnReconnect as boolean | undefined) ?? globalCfg.defaultRefetchOnReconnect
+        const cleanups = setupFocusReconnect(() => initialFetch(), opts)
 
-        if (refetchOnFocus) {
-          cleanups.push(onWindowFocus(() => initialFetch()))
-        }
-        if (refetchOnReconnectOpt) {
-          cleanups.push(onReconnect(() => initialFetch()))
+        // Polling support for infinite queries
+        const pollingInterval = (declarativeOptionsRef.current as { polling?: number } | undefined)?.polling
+
+        if (pollingInterval && pollingInterval > 0) {
+          const tick = () => {
+            const currentState = useStore.getState().apiStates[cacheKey]
+            if (currentState?.status === FetchStatus.LOADING) return
+            initialFetch()
+          }
+
+          const intervalId = setInterval(tick, pollingInterval)
+          return () => {
+            unregisterActiveQuery(key as string, cacheKey)
+            clearInterval(intervalId)
+            cleanups.forEach(fn => fn())
+          }
         }
 
         return () => {
@@ -603,30 +650,15 @@ export function createApiComposer<TApiStructure>(
       // Trigger initial fetch
       refetch()
 
-      // Focus/reconnect subscriptions
-      const cleanups: (() => void)[] = []
-      const globalCfg = getGlobalConfig()
-      const refetchOnFocus = (opts?.refetchOnWindowFocus as boolean | undefined) ?? globalCfg.defaultRefetchOnWindowFocus
-      const refetchOnReconnectOpt = (opts?.refetchOnReconnect as boolean | undefined) ?? globalCfg.defaultRefetchOnReconnect
-
-      if (refetchOnFocus) {
-        cleanups.push(onWindowFocus(() => {
-          const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-          const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
-          const currentCacheKey = compositeKey(key as string, currentParams)
-          const currentApiOptions = extractApiOptions(currentOpts)
-          useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), currentApiOptions)
-        }))
+      // Focus/reconnect subscriptions (re-read current params from ref)
+      const refetchFromRef = () => {
+        const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+        const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
+        const currentCacheKey = compositeKey(key as string, currentParams)
+        const currentApiOptions = extractApiOptions(currentOpts)
+        useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), currentApiOptions)
       }
-      if (refetchOnReconnectOpt) {
-        cleanups.push(onReconnect(() => {
-          const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-          const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
-          const currentCacheKey = compositeKey(key as string, currentParams)
-          const currentApiOptions = extractApiOptions(currentOpts)
-          useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), currentApiOptions)
-        }))
-      }
+      const cleanups = setupFocusReconnect(refetchFromRef, opts)
 
       // Polling support
       const pollingInterval = (declarativeOptionsRef.current as { polling?: number } | undefined)?.polling

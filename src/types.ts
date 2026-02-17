@@ -463,88 +463,6 @@ export interface ApiStoreConfig {
 }
 
 /**
- * The return type of {@link useApiQuery}.
- * Provides reactive access to the API state along with functions to trigger and reset.
- *
- * @typeParam T - The response data type.
- */
-export interface ApiQueryResult<T> {
-  /** The response data, or `null` if not yet loaded or on error. */
-  data: T | null
-  /** The raw lifecycle status of the API request. */
-  status: FetchStatus
-  /** `true` if no request has been made yet for this key. */
-  isIdle: boolean
-  /** `true` if a request is in progress (includes background refetches). */
-  isFetching: boolean
-  /** `true` only on first load (loading and no data yet). */
-  isLoading: boolean
-  /** `true` if the last request completed successfully. */
-  isSuccess: boolean
-  /** `true` if the last request failed. */
-  isError: boolean
-  /** The error from the last failed request, or `null`. */
-  error: ApiError | null
-  /** Timestamp (ms since epoch) of the last successful fetch, or `null`. */
-  fetchedAt: number | null
-  /**
-   * Trigger an API call for this endpoint.
-   *
-   * @param apiCall - A function that returns a promise resolving to `T`.
-   * @param options - Optional configuration for persistence, retries, abort, and callbacks.
-   * @returns The response data on success, or `undefined` otherwise.
-   */
-  query: (
-    apiCall: () => Promise<T>,
-    options?: ApiCallOptions<T>
-  ) => Promise<T | undefined>
-  /** Reset this endpoint's state back to idle and remove it from persistence. */
-  reset: () => void
-  /** Mark this endpoint's cache as stale so the next call with `staleTime` will refetch. */
-  invalidate: () => void
-}
-
-/**
- * The return type of {@link useApiMutation}.
- * Provides reactive access to mutation state with a `mutate` function optimized for write operations.
- *
- * @typeParam T - The response data type.
- * @typeParam V - The variables/payload type passed to the mutation.
- */
-export interface ApiMutationResult<T, V = void> {
-  /** The response data from the last successful mutation, or `null`. */
-  data: T | null
-  /** The raw lifecycle status of the mutation. */
-  status: FetchStatus
-  /** `true` if no mutation has been called yet for this key. */
-  isIdle: boolean
-  /** `true` if a mutation is in progress (includes background refetches). */
-  isFetching: boolean
-  /** `true` only on first load (loading and no data yet). */
-  isLoading: boolean
-  /** `true` if the last mutation completed successfully. */
-  isSuccess: boolean
-  /** `true` if the last mutation failed. */
-  isError: boolean
-  /** The error from the last failed mutation, or `null`. */
-  error: ApiError | null
-  /**
-   * Trigger a mutation with the given variables/payload.
-   *
-   * @param variables - The payload to pass to the mutation function.
-   * @param options - Optional configuration for persistence, retries, abort, and callbacks.
-   * @returns The response data on success, or `undefined` otherwise.
-   */
-  mutate: (
-    ...args: V extends void
-      ? [options?: ApiCallOptions<T>]
-      : [variables: V, options?: ApiCallOptions<T>]
-  ) => Promise<T | undefined>
-  /** Reset this mutation's state back to idle. */
-  reset: () => void
-}
-
-/**
  * Extracts the keys from an API structure that are query endpoints.
  *
  * @typeParam T - The API structure interface.
@@ -745,20 +663,6 @@ export type ApiComposerReturn<TApiStructure, K extends keyof TApiStructure> =
       : TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
         ? ApiComposerMutationResult<R, V>
         : never
-
-/**
- * Options for declarative auto-fetching mode in {@link useApiQuery}.
- * When `queryFn` is provided, the hook will automatically trigger a fetch on mount
- * and when `key` or `enabled` changes.
- *
- * @typeParam T - The expected response data type.
- */
-export interface UseApiQueryOptions<T = unknown> extends ApiCallOptions<T> {
-  /** The function to call for fetching data. When provided, enables declarative auto-fetch mode. */
-  queryFn?: () => Promise<T>
-  /** If `false`, the auto-fetch is paused. Defaults to `true`. */
-  enabled?: boolean
-}
 
 /**
  * Conditional options type for declarative auto-fetching in the composer.

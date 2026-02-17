@@ -2070,3 +2070,252 @@ describe('createApiComposer — infinite queries', () => {
     expect(queryFn).toHaveBeenCalledWith({ userId: 42 }, undefined)
   })
 })
+
+// ====================
+// Reference Counting
+// ====================
+
+describe('createApiComposer — reference counting', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('two hooks sharing same query — first unmount does not trigger GC', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    // Mount two hooks for the same declarative query
+    const { unmount: unmount1 } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 5000 })
+    )
+    const { unmount: unmount2 } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 5000 })
+    )
+
+    // Flush microtasks so handleApi resolves
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']?.status).toBe('SUCCESS')
+
+    // Unmount the first hook
+    unmount1()
+
+    // Advance past gcTime — cache should NOT be deleted because second hook is still mounted
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+
+    // Unmount second hook — now GC should start
+    unmount2()
+
+    // Advance past gcTime — cache should be deleted now
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']).toBeUndefined()
+  })
+})
+
+// ====================
+// Invalidation Timing with staleTime
+// ====================
+
+describe('createApiComposer — invalidation timing with staleTime', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('invalidation clears fetchedAt before refetch so staleTime does not skip it', async () => {
+    let callCount = 0
+    const listUsersCall = vi.fn(() => {
+      callCount++
+      return Promise.resolve([
+        { id: callCount, name: `User ${callCount}`, email: `user${callCount}@test.com` }
+      ])
+    })
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ id: 99, ...payload })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers']
+        }
+      }
+    })
+
+    // Mount declarative query with a long staleTime
+    const { result: listResult } = renderHook(() =>
+      useModernApi('listUsers', { staleTime: 60_000 })
+    )
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // Perform mutation that invalidates listUsers
+    const { result: mutResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutResult.current.mutate({ name: 'Alice', email: 'alice@test.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutResult.current.isSuccess).toBe(true)
+    })
+
+    // Despite staleTime: 60_000, the refetch should have happened because
+    // invalidateApis clears fetchedAt BEFORE refetchFn is called
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+  })
+})
+
+// ====================
+// Infinite Query Polling
+// ====================
+
+describe('createApiComposer — infinite query polling', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('polls infinite query at the given interval', async () => {
+    vi.useFakeTimers()
+
+    const queryFn = vi.fn((_params: void, _cursor: string | undefined) =>
+      Promise.resolve({
+        items: [{ id: 1, title: 'Post 1' }],
+        nextCursor: 'cursor2' as string | null
+      })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { unmount } = renderHook(() =>
+      useApi('listPosts', { polling: 1000 })
+    )
+
+    // Initial fetch
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(1)
+
+    // First poll tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(2)
+
+    // Second poll tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(3)
+
+    unmount()
+
+    // Should not poll after unmount
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(queryFn).toHaveBeenCalledTimes(3)
+
+    vi.useRealTimers()
+  })
+
+  it('skips poll tick if infinite query is still loading', async () => {
+    vi.useFakeTimers()
+
+    let resolveCall: (() => void) | undefined
+    let callCount = 0
+    const queryFn = vi.fn((_params: void, _cursor: string | undefined) => {
+      callCount++
+      if (callCount === 2) {
+        return new Promise<PostPage>(resolve => {
+          resolveCall = () => resolve({
+            items: [{ id: 1, title: 'Post 1' }],
+            nextCursor: null
+          })
+        })
+      }
+      return Promise.resolve({
+        items: [{ id: 1, title: 'Post 1' }],
+        nextCursor: null as string | null
+      })
+    })
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { unmount } = renderHook(() =>
+      useApi('listPosts', { polling: 500 })
+    )
+
+    // Initial fetch
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(1)
+
+    // First poll — starts slow request
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(2)
+
+    // Second poll — should skip because still loading
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(2)
+
+    // Resolve the slow call
+    await act(async () => {
+      resolveCall?.()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // Next poll should fire
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(queryFn).toHaveBeenCalledTimes(3)
+
+    unmount()
+    vi.useRealTimers()
+  })
+})
