@@ -40,47 +40,49 @@ interface MyApi {
 // Mock API Functions
 // ====================
 
+let mockUsers: User[] = [
+  { id: 1, name: 'John Doe', email: 'john@example.com' },
+  { id: 2, name: 'Jane Smith', email: 'jane@example.com' },
+  { id: 3, name: 'Bob Johnson', email: 'bob@example.com' }
+]
+
 const api = {
   getUser: async (params: { id: number }) => {
     await new Promise(resolve => setTimeout(resolve, 500))
+    const user = mockUsers.find(u => u.id === params.id)
     return {
-      data: { id: params.id, name: `User ${params.id}`, email: `user${params.id}@example.com` }
+      data: user ?? { id: params.id, name: `User ${params.id}`, email: `user${params.id}@example.com` }
     }
   },
 
   listUsers: async () => {
     await new Promise(resolve => setTimeout(resolve, 500))
-    return {
-      data: [
-        { id: 1, name: 'John Doe', email: 'john@example.com' },
-        { id: 2, name: 'Jane Smith', email: 'jane@example.com' },
-        { id: 3, name: 'Bob Johnson', email: 'bob@example.com' }
-      ]
-    }
+    return { data: [...mockUsers] }
   },
 
   createUser: async (payload: CreateUserPayload) => {
-    await new Promise(resolve => setTimeout(resolve, 500))
-    return {
-      data: { id: Date.now(), ...payload }
-    }
+    await new Promise(resolve => setTimeout(resolve, 800))
+    const newUser = { id: Date.now(), ...payload }
+    mockUsers = [...mockUsers, newUser]
+    return { data: newUser }
   },
 
   updateUser: async (params: { id: number; data: UpdateUserPayload }) => {
     await new Promise(resolve => setTimeout(resolve, 500))
-    return {
-      data: { id: params.id, name: 'Updated User', email: 'updated@example.com', ...params.data }
-    }
+    const updated = { id: params.id, name: 'Updated User', email: 'updated@example.com', ...params.data }
+    mockUsers = mockUsers.map(u => (u.id === params.id ? { ...u, ...updated } : u))
+    return { data: updated }
   },
 
-  deleteUser: async (_params: { id: number }) => {
+  deleteUser: async (params: { id: number }) => {
     await new Promise(resolve => setTimeout(resolve, 500))
+    mockUsers = mockUsers.filter(u => u.id !== params.id)
     return { data: undefined }
   }
 }
 
 // ====================
-// Create Composer
+// Create Composer — with invalidation + optimistic updates
 // ====================
 
 const useApi = createApiComposer<MyApi>({
@@ -89,9 +91,27 @@ const useApi = createApiComposer<MyApi>({
     listUsers: api.listUsers
   },
   mutations: {
-    createUser: api.createUser,
-    updateUser: api.updateUser,
-    deleteUser: api.deleteUser
+    // createUser: invalidates listUsers + optimistic update
+    createUser: {
+      fn: api.createUser,
+      invalidates: ['listUsers'],
+      optimistic: {
+        listUsers: (vars, current) => [
+          ...(current ?? []),
+          { id: Date.now(), name: vars.name, email: vars.email }
+        ]
+      }
+    },
+    // deleteUser: invalidates listUsers + optimistic removal
+    deleteUser: {
+      fn: api.deleteUser,
+      invalidates: ['listUsers'],
+      optimistic: {
+        listUsers: (vars, current) => (current ?? []).filter(u => u.id !== vars.id)
+      }
+    },
+    // updateUser: bare function (no invalidation — backward compat demo)
+    updateUser: api.updateUser
   }
 })
 
@@ -136,9 +156,10 @@ function UserProfile({ userId }: { userId: number }) {
 
 function UserList() {
   // Declarative mode — void params, auto-fetches on mount
+  // This query is automatically refetched when createUser or deleteUser succeeds
   const { data, isLoading } = useApi('listUsers', {})
 
-  if (isLoading) return <div>Loading users...</div>
+  if (isLoading && !data) return <div>Loading users...</div>
 
   return (
     <div
@@ -149,11 +170,13 @@ function UserList() {
         marginBottom: '16px'
       }}
     >
-      <h3>User List (Declarative Query)</h3>
+      <h3>User List (Auto-Invalidated by Mutations)</h3>
+      {isLoading && <div style={{ fontSize: '12px', color: '#888' }}>Refreshing...</div>}
       <ul>
         {data?.map(user => (
-          <li key={user.id}>
+          <li key={user.id} style={{ marginBottom: '4px' }}>
             {user.name} ({user.email})
+            <DeleteUserButton userId={user.id} userName={user.name} />
           </li>
         ))}
       </ul>
@@ -190,12 +213,16 @@ function CreateUserForm() {
     <div
       style={{
         padding: '16px',
-        border: '1px solid #ccc',
+        border: '1px solid #4CAF50',
         borderRadius: '8px',
         marginBottom: '16px'
       }}
     >
-      <h3>Create User (Mutation Endpoint)</h3>
+      <h3>Create User (Mutation with Invalidation + Optimistic)</h3>
+      <p style={{ fontSize: '12px', color: '#666' }}>
+        On submit: list updates optimistically, then refetches from server on success.
+        On error: list rolls back to previous data.
+      </p>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '8px' }}>
@@ -231,6 +258,25 @@ function CreateUserForm() {
   )
 }
 
+function DeleteUserButton({ userId, userName }: { userId: number; userName: string }) {
+  const { mutate, isLoading } = useApi('deleteUser')
+
+  const handleDelete = async () => {
+    if (!confirm(`Delete ${userName}?`)) return
+    await mutate({ id: userId })
+  }
+
+  return (
+    <button
+      onClick={handleDelete}
+      disabled={isLoading}
+      style={{ marginLeft: '8px', fontSize: '12px', color: 'red', cursor: 'pointer' }}
+    >
+      {isLoading ? '...' : 'Delete'}
+    </button>
+  )
+}
+
 function UpdateUserForm() {
   const { mutate, isLoading, isSuccess, reset } = useApi('updateUser')
   const [userId, setUserId] = React.useState('1')
@@ -263,7 +309,10 @@ function UpdateUserForm() {
         marginBottom: '16px'
       }}
     >
-      <h3>Update User (Mutation Endpoint)</h3>
+      <h3>Update User (Bare Function — No Auto-Invalidation)</h3>
+      <p style={{ fontSize: '12px', color: '#666' }}>
+        This mutation uses a bare function (backward compat). No automatic invalidation.
+      </p>
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '8px' }}>
@@ -297,41 +346,6 @@ function UpdateUserForm() {
   )
 }
 
-function DeleteUserButton({ userId }: { userId: number }) {
-  const { mutate, isLoading, isSuccess, reset } = useApi('deleteUser')
-
-  const handleDelete = async () => {
-    if (!confirm(`Delete user ${userId}?`)) return
-
-    await mutate(
-      { id: userId },
-      {
-        onSuccess: () => {
-          console.log('User deleted')
-          setTimeout(() => reset(), 2000)
-        }
-      }
-    )
-  }
-
-  return (
-    <div
-      style={{
-        padding: '16px',
-        border: '1px solid #ccc',
-        borderRadius: '8px',
-        marginBottom: '16px'
-      }}
-    >
-      <h3>Delete User (Mutation Endpoint)</h3>
-      <button onClick={handleDelete} disabled={isLoading}>
-        {isLoading ? 'Deleting...' : `Delete User ${userId}`}
-      </button>
-      {isSuccess && <span style={{ color: 'red', marginLeft: '8px' }}>Deleted!</span>}
-    </div>
-  )
-}
-
 // ====================
 // Main App
 // ====================
@@ -341,8 +355,8 @@ export default function App() {
     <div style={{ padding: '24px', maxWidth: '800px', margin: '0 auto' }}>
       <h1>Modern API Composer Example</h1>
       <p>
-        This example demonstrates using <code>createApiComposer</code> with both query and mutation
-        endpoints. Queries use declarative auto-fetching with <code>params</code>.
+        This example demonstrates <code>createApiComposer</code> with automatic cache invalidation
+        and cross-endpoint optimistic updates.
       </p>
 
       <hr style={{ margin: '24px 0' }} />
@@ -353,32 +367,28 @@ export default function App() {
 
       <hr style={{ margin: '24px 0' }} />
 
-      <h2>Mutations (Write Operations)</h2>
+      <h2>Mutations</h2>
       <CreateUserForm />
       <UpdateUserForm />
-      <DeleteUserButton userId={1} />
 
       <hr style={{ margin: '24px 0' }} />
 
       <div style={{ padding: '16px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
-        <h3>Key Differences:</h3>
+        <h3>How It Works:</h3>
         <ul>
           <li>
-            <strong>Declarative queries</strong> auto-fetch when <code>params</code> is provided as
-            second argument
+            <strong>createUser</strong> has <code>invalidates: ['listUsers']</code> and{' '}
+            <code>optimistic</code> — the list updates instantly, then refetches from server
           </li>
           <li>
-            <strong>Observer mode</strong> reads state without fetching when no second arg is given
+            <strong>deleteUser</strong> has <code>invalidates: ['listUsers']</code> and{' '}
+            <code>optimistic</code> — the user disappears instantly, then server confirms
           </li>
           <li>
-            <strong>Query endpoints</strong> use <code>ApiQueryEndpoint</code> and return{' '}
-            <code>query</code>, <code>reset</code>, <code>invalidate</code>, and{' '}
-            <code>fetchedAt</code>
+            <strong>updateUser</strong> uses a bare function (backward compat) — no auto-invalidation
           </li>
           <li>
-            <strong>Mutation endpoints</strong> use <code>ApiMutationEndpoint</code> and return{' '}
-            <code>mutate</code>
-            and <code>reset</code> (no invalidate or fetchedAt)
+            If a mutation <strong>fails</strong>, optimistic data rolls back automatically
           </li>
         </ul>
       </div>

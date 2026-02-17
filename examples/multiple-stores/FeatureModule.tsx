@@ -1,5 +1,5 @@
 import React from 'react'
-import { createApiStore } from 'zustand-api-manager'
+import { createApiStore, ApiQueryEndpoint } from 'zustand-api-manager'
 
 /**
  * Create an isolated store for this feature module.
@@ -7,9 +7,8 @@ import { createApiStore } from 'zustand-api-manager'
  */
 const {
   useStore: useFeatureStore,
-  useApiQuery,
   useLoadingStates,
-  usePrefetch
+  createApiComposer
 } = createApiStore({
   storageKey: 'feature-module',
   enableDevtools: true,
@@ -22,34 +21,40 @@ interface FeatureData {
   config: Record<string, unknown>
 }
 
+interface FeatureApi {
+  featureData: ApiQueryEndpoint<{ id: number }, FeatureData>
+}
+
 const api = {
-  getFeatureData: async (id: number): Promise<{ data: FeatureData }> => {
-    const response = await fetch(`/api/features/${id}`)
+  getFeatureData: async (params: { id: number }): Promise<{ data: FeatureData }> => {
+    const response = await fetch(`/api/features/${params.id}`)
     const data = await response.json()
     return { data }
   }
 }
 
+const useApi = createApiComposer<FeatureApi>({
+  queries: {
+    featureData: (params) => api.getFeatureData(params)
+  }
+})
+
 export default function FeatureModule() {
   // Declarative mode — auto-fetches on mount
-  const { data, isLoading } = useApiQuery<FeatureData>('featureData', {
-    queryFn: () => api.getFeatureData(1),
+  const { data, isLoading } = useApi('featureData', {
+    params: { id: 1 },
     persist: true,
-    staleTime: 300_000 // Fresh for 5 minutes
+    staleTime: 300_000
   })
 
   const isAnyLoading = useLoadingStates()
-  const { prefetch } = usePrefetch()
 
   // Prefetch next feature data on hover
   const handlePrefetchNext = () => {
-    prefetch('featureData-2', () => api.getFeatureData(2), {
-      staleTime: 300_000
-    })
+    useApi.prefetch('featureData', { id: 2 }, { staleTime: 300_000 })
   }
 
   // This component's state is completely isolated from other stores
-  // You can reset just this feature's state without affecting global state
   const handleReset = () => {
     useFeatureStore.getState().resetAll()
   }

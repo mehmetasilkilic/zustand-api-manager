@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useApiMutation, useApiStore } from 'zustand-api-manager'
+import { createApiComposer, ApiMutationEndpoint, useApiStore } from 'zustand-api-manager'
 
 interface LoginCredentials {
   email: string
@@ -28,14 +28,21 @@ const api = {
   }
 }
 
+interface AuthApi {
+  login: ApiMutationEndpoint<LoginCredentials, AuthResponse>
+}
+
+const useApi = createApiComposer<AuthApi>({
+  mutations: {
+    login: (credentials) => api.login(credentials)
+  }
+})
+
 export default function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
-  const { mutate, isLoading, error } = useApiMutation<AuthResponse, LoginCredentials>(
-    'login',
-    api.login
-  )
+  const { mutate, isLoading, error } = useApi('login')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -44,7 +51,6 @@ export default function LoginForm() {
       { email, password },
       {
         onSuccess: auth => {
-          // Store token
           localStorage.setItem('token', auth.token)
           console.log('Logged in as:', auth.user.name)
         },
@@ -55,13 +61,11 @@ export default function LoginForm() {
     )
 
     if (result) {
-      // Navigate to dashboard
       window.location.href = '/dashboard'
     }
   }
 
   const handleLogout = () => {
-    // Clear all API state on logout
     useApiStore.getState().resetAll()
     localStorage.removeItem('token')
   }

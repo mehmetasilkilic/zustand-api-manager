@@ -1,7 +1,5 @@
 import React, { useState } from 'react'
-import { usePolling } from 'zustand-api-manager'
-
-// Note: usePolling is built on top of useApiQuery and handles the query lifecycle automatically
+import { createApiComposer, ApiQueryEndpoint } from 'zustand-api-manager'
 
 interface Notification {
   id: number
@@ -18,27 +16,32 @@ const api = {
   }
 }
 
+interface NotificationApi {
+  getNotifications: ApiQueryEndpoint<void, Notification[]>
+}
+
+const useApi = createApiComposer<NotificationApi>({
+  queries: {
+    getNotifications: api.getNotifications
+  }
+})
+
 export default function NotificationBell() {
   const [isOpen, setIsOpen] = useState(false)
 
-  // Poll every 10 seconds when dropdown is closed
-  // Stop polling when dropdown is open to avoid updates while reading
-  const { data, isLoading } = usePolling<Notification[]>(
-    'notifications',
-    api.getNotifications,
-    10_000, // Poll every 10 seconds
-    {
-      immediate: true, // Fetch immediately on mount
-      enabled: !isOpen, // Only poll when dropdown is closed
-      staleTime: 5_000, // Consider fresh for 5 seconds
-      onSuccess: notifications => {
-        const unreadCount = notifications.filter(n => !n.read).length
-        if (unreadCount > 0) {
-          document.title = `(${unreadCount}) App`
-        }
+  // Declarative mode with polling — fetches immediately and polls every 10 seconds
+  // Polling pauses when dropdown is open to avoid updates while reading
+  const { data, isLoading } = useApi('getNotifications', {
+    polling: 10_000,
+    enabled: !isOpen,
+    staleTime: 5_000,
+    onSuccess: notifications => {
+      const unreadCount = notifications.filter(n => !n.read).length
+      if (unreadCount > 0) {
+        document.title = `(${unreadCount}) App`
       }
     }
-  )
+  })
 
   const unreadCount = data?.filter(n => !n.read).length || 0
 

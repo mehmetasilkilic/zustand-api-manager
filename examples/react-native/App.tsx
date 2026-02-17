@@ -11,10 +11,10 @@ import {
 } from 'react-native'
 import {
   ApiQueryEndpoint,
+  ApiMutationEndpoint,
   createApiComposer,
   createApiStore,
   FetchStatus,
-  useApiQuery,
   useApiStore,
   useLoadingStates
 } from 'zustand-api-manager'
@@ -69,11 +69,6 @@ const fetchComments = () =>
     )
   })
 
-const updateUser = (user: User) =>
-  new Promise<{ data: User }>(resolve => {
-    setTimeout(() => resolve({ data: { ...user, username: user.username + ' (saved)' } }), 1500)
-  })
-
 // Second store ----------------------------------------------------------------
 
 interface SecondApiStructure {
@@ -89,15 +84,32 @@ const useSecondApi = secondStore.createApiComposer<SecondApiStructure>({
 
 // Default store composer ------------------------------------------------------
 
+interface CreatePostPayload {
+  title: string
+}
+
 interface DefaultApiStructure {
   getUser: ApiQueryEndpoint<{ id: number }, User>
   getPosts: ApiQueryEndpoint<void, Post[]>
+  createPost: ApiMutationEndpoint<CreatePostPayload, Post>
 }
 
 const useApi = createApiComposer<DefaultApiStructure>({
   queries: {
     getUser: (params) => fetchUser(params.id),
     getPosts: fetchPosts
+  },
+  mutations: {
+    createPost: {
+      fn: (payload) =>
+        new Promise(resolve =>
+          setTimeout(() => resolve({ data: { id: Date.now(), title: payload.title } }), 500)
+        ),
+      invalidates: ['getPosts'],
+      optimistic: {
+        getPosts: (vars, current) => [...(current ?? []), { id: Date.now(), title: vars.title }]
+      }
+    }
   }
 })
 
@@ -143,152 +155,7 @@ const SecondStoreLoading: React.FC = () => {
   )
 }
 
-const DeclarativeExample: React.FC = () => {
-  // Declarative mode — auto-fetches on mount
-  const { data, status, isLoading, fetchedAt, reset } = useApiQuery<User>('user', {
-    queryFn: () => fetchUser(7),
-    persist: true,
-    staleTime: 5000,
-    onSuccess: d => console.log('User loaded:', d.username)
-  })
-
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>useApiQuery — declarative mode</Text>
-      <Text style={styles.featureHint}>queryFn · staleTime · persist · auto-fetch on mount</Text>
-      <View style={styles.buttonRow}>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title="Reset"
-            onPress={reset}
-            disabled={status === FetchStatus.IDLE}
-            color="#999"
-          />
-        </View>
-      </View>
-      <Text style={styles.statusText}>
-        Status: {status}
-        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
-      </Text>
-      {isLoading && <ActivityIndicator size="small" style={{ marginVertical: 4 }} />}
-      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
-    </View>
-  )
-}
-
-const ImperativeExample: React.FC = () => {
-  const { data, isIdle, isLoading, status, fetchedAt, query, reset } =
-    useApiQuery<User>('imperative-user')
-
-  const loadUser = async () => {
-    const user = await query(() => fetchUser(42), { staleTime: 5000 })
-    if (user) console.log('Returned user:', user.username)
-  }
-
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>useApiQuery — imperative mode</Text>
-      <Text style={styles.featureHint}>query() on button press · staleTime · fetchedAt</Text>
-      <View style={styles.buttonRow}>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title={isLoading ? 'Loading...' : 'Load user'}
-            onPress={loadUser}
-            disabled={isLoading}
-          />
-        </View>
-        <View style={styles.buttonWrapper}>
-          <Button title="Reset" onPress={reset} disabled={isIdle} color="#999" />
-        </View>
-      </View>
-      <Text style={styles.statusText}>
-        Status: {status}
-        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
-      </Text>
-      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
-    </View>
-  )
-}
-
-const DeclarativeKeyChangeExample: React.FC = () => {
-  const [userId, setUserId] = useState(1)
-
-  // Declarative mode — auto-refetches when key changes
-  const { data, isLoading, status, fetchedAt, reset } = useApiQuery<User>(`user-${userId}`, {
-    queryFn: () => fetchUser(userId),
-    staleTime: 5000
-  })
-
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>Declarative with key change</Text>
-      <Text style={styles.featureHint}>queryFn · key changes trigger refetch · staleTime</Text>
-      <View style={styles.buttonRow}>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title={`Next user (current: ${userId})`}
-            onPress={() => setUserId(id => id + 1)}
-          />
-        </View>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title="Reset"
-            onPress={reset}
-            disabled={status === FetchStatus.IDLE}
-            color="#999"
-          />
-        </View>
-      </View>
-      <Text style={styles.statusText}>
-        Status: {status}
-        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
-      </Text>
-      {isLoading && <ActivityIndicator size="small" style={{ marginVertical: 4 }} />}
-      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
-    </View>
-  )
-}
-
-const OptimisticUpdateExample: React.FC = () => {
-  const { data, isLoading, status, query, reset } = useApiQuery<User>('optimistic-user')
-
-  const saveUser = () => {
-    const optimistic: User = { id: 42, username: 'optimistic-jane' }
-    void query(() => updateUser(optimistic), {
-      optimisticData: optimistic,
-      onSuccess: d => console.log('Saved user:', d.username)
-    })
-  }
-
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>Optimistic update — default store</Text>
-      <Text style={styles.featureHint}>optimisticData · onSuccess</Text>
-      <View style={styles.buttonRow}>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title={isLoading ? 'Saving...' : 'Save user'}
-            onPress={saveUser}
-            disabled={isLoading}
-          />
-        </View>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title="Reset"
-            onPress={reset}
-            disabled={status === FetchStatus.IDLE}
-            color="#999"
-          />
-        </View>
-      </View>
-      <Text style={styles.statusText}>Status: {status}</Text>
-      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
-    </View>
-  )
-}
-
 const ComposerDeclarativeExample: React.FC = () => {
-  // Declarative mode — auto-fetches on mount
   const { data: posts, isLoading, isError, status, fetchedAt, reset } =
     useApi('getPosts', { staleTime: 10000 })
 
@@ -324,7 +191,6 @@ const ComposerDeclarativeExample: React.FC = () => {
 const ComposerParamChangeExample: React.FC = () => {
   const [userId, setUserId] = useState(1)
 
-  // Declarative mode — auto-refetches when params change
   const { data, isLoading, status, fetchedAt, reset } = useApi('getUser', {
     params: { id: userId }
   })
@@ -359,9 +225,106 @@ const ComposerParamChangeExample: React.FC = () => {
   )
 }
 
-/** Uses the second store — completely isolated from the default store. */
+const ComposerImperativeExample: React.FC = () => {
+  const { data, isIdle, isLoading, status, fetchedAt, query, reset } =
+    useApi('getUser')
+
+  const loadUser = async () => {
+    const user = await query({ id: 42 }, { staleTime: 5000 })
+    if (user) console.log('Returned user:', user.username)
+  }
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Composer — imperative mode</Text>
+      <Text style={styles.featureHint}>query() on button press · staleTime · fetchedAt</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Loading...' : 'Load user'}
+            onPress={loadUser}
+            disabled={isLoading}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="Reset" onPress={reset} disabled={isIdle} color="#999" />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
+      </Text>
+      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
+    </View>
+  )
+}
+
+const ComposerPollingExample: React.FC = () => {
+  const [enabled, setEnabled] = useState(true)
+
+  const { data: posts, isLoading, status, fetchedAt } = useApi('getPosts', {
+    polling: 5000,
+    enabled,
+    staleTime: 2000
+  })
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Composer — polling</Text>
+      <Text style={styles.featureHint}>polling: 5000 · enabled toggle · staleTime</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={enabled ? 'Pause polling' : 'Resume polling'}
+            onPress={() => setEnabled(e => !e)}
+          />
+        </View>
+      </View>
+      <Text style={styles.statusText}>
+        Status: {status}
+        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
+      </Text>
+      {isLoading && <ActivityIndicator size="small" style={{ marginVertical: 4 }} />}
+      {posts?.map(post => (
+        <Text key={post.id} style={styles.listItem}>
+          * {post.title}
+        </Text>
+      )) ?? <Text style={styles.listItem}>No posts loaded</Text>}
+    </View>
+  )
+}
+
+const ComposerMutationExample: React.FC = () => {
+  const { mutate, isLoading, isSuccess, data, reset } = useApi('createPost')
+
+  const handleCreate = () => {
+    mutate({ title: `Post at ${new Date().toLocaleTimeString()}` })
+  }
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Composer — mutation with invalidation</Text>
+      <Text style={styles.featureHint}>createPost · invalidates getPosts · optimistic</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isLoading ? 'Creating...' : 'Create Post'}
+            onPress={handleCreate}
+            disabled={isLoading}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button title="Reset" onPress={reset} disabled={!isSuccess} color="#999" />
+        </View>
+      </View>
+      {isSuccess && data && (
+        <Text style={styles.mono}>{JSON.stringify(data, null, 2)}</Text>
+      )}
+    </View>
+  )
+}
+
 const SecondStoreExample: React.FC = () => {
-  // Declarative mode on second store's composer
   const {
     data: comments,
     isLoading,
@@ -407,45 +370,6 @@ const SecondStoreExample: React.FC = () => {
   )
 }
 
-const SecondStoreHandlerExample: React.FC = () => {
-  const { data, isLoading, status, fetchedAt, query, reset } = secondStore.useApiQuery<User>('user')
-
-  const loadUser = async () => {
-    const user = await query(() => fetchUser(99), { staleTime: 5000 })
-    if (user) console.log('[Second store] user:', user.username)
-  }
-
-  return (
-    <View style={[styles.card, { borderColor: '#b7eb8f', borderWidth: 1 }]}>
-      <Text style={styles.cardTitle}>useApiQuery — second store (same 'user' key)</Text>
-      <Text style={styles.featureHint}>same key name as default store — proves isolation</Text>
-      <View style={styles.buttonRow}>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title={isLoading ? 'Loading...' : 'Load user (id=99)'}
-            onPress={loadUser}
-            disabled={isLoading}
-            color="#52c41a"
-          />
-        </View>
-        <View style={styles.buttonWrapper}>
-          <Button
-            title="Reset"
-            onPress={reset}
-            disabled={status === FetchStatus.IDLE}
-            color="#999"
-          />
-        </View>
-      </View>
-      <Text style={styles.statusText}>
-        Status: {status}
-        {fetchedAt ? `  (fetched at ${new Date(fetchedAt).toLocaleTimeString()})` : ''}
-      </Text>
-      <Text style={styles.mono}>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Text>
-    </View>
-  )
-}
-
 const ResetAllExample: React.FC = () => {
   const resetDefault = () => useApiStore.getState().resetAll()
   const resetSecond = () => secondStore.useStore.getState().resetAll()
@@ -481,10 +405,10 @@ const App: React.FC = () => {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Zustand API Manager — Multi-Store</Text>
+        <Text style={styles.title}>Zustand API Manager — Composer-Only</Text>
         <Text style={styles.subtitle}>
-          Declarative auto-fetching, two isolated stores, and the same "user" key proving store
-          isolation.
+          Declarative auto-fetching, polling, mutations with invalidation,
+          two isolated stores proving store isolation.
         </Text>
 
         <GlobalLoadingIndicator />
@@ -492,16 +416,14 @@ const App: React.FC = () => {
         <SecondStoreLoading />
 
         <Text style={styles.sectionTitle}>Default store</Text>
-        <DeclarativeExample />
-        <ImperativeExample />
-        <DeclarativeKeyChangeExample />
-        <OptimisticUpdateExample />
         <ComposerDeclarativeExample />
         <ComposerParamChangeExample />
+        <ComposerImperativeExample />
+        <ComposerPollingExample />
+        <ComposerMutationExample />
 
         <Text style={[styles.sectionTitle, { color: '#52c41a' }]}>Second store</Text>
         <SecondStoreExample />
-        <SecondStoreHandlerExample />
 
         <Text style={styles.sectionTitle}>Bulk operations</Text>
         <ResetAllExample />

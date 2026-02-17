@@ -507,8 +507,63 @@ export interface ApiMutationResult<T, V = void> {
 }
 
 /**
+ * Extracts the keys from an API structure that are query endpoints.
+ *
+ * @typeParam T - The API structure interface.
+ */
+export type QueryKeys<T> = {
+  [K in keyof T]: T[K] extends ApiQueryEndpoint<any, any> ? K : never
+}[keyof T]
+
+/**
+ * A map of optimistic updater functions keyed by query endpoint name.
+ * Each updater receives the mutation variables and the current cached data
+ * for that query, and returns the new optimistic data to display immediately.
+ *
+ * @typeParam TApi - The API structure interface.
+ * @typeParam V - The mutation variables type.
+ */
+export type OptimisticUpdaters<TApi, V> = {
+  [Q in QueryKeys<TApi>]?: TApi[Q] extends ApiQueryEndpoint<any, infer QR>
+    ? (variables: V, currentData: QR | null) => QR
+    : never
+}
+
+/**
+ * Extended mutation endpoint configuration that supports automatic cache
+ * invalidation and cross-endpoint optimistic updates.
+ *
+ * @typeParam TApi - The API structure interface.
+ * @typeParam V - The mutation variables type.
+ * @typeParam R - The mutation response type.
+ *
+ * @example
+ * ```ts
+ * const config: MutationEndpointConfig<MyApi, CreateUserPayload, User> = {
+ *   fn: (payload) => api.createUser(payload),
+ *   invalidates: ['listUsers'],
+ *   optimistic: {
+ *     listUsers: (variables, currentData) =>
+ *       [...(currentData ?? []), { id: Date.now(), ...variables }]
+ *   }
+ * }
+ * ```
+ */
+export interface MutationEndpointConfig<TApi, V, R> {
+  /** The mutation function to call. */
+  fn: (variables: V) => Promise<{ data: R }>
+  /** Query keys to invalidate on successful mutation. */
+  invalidates?: QueryKeys<TApi>[]
+  /** Optimistic updaters to apply before the mutation resolves. */
+  optimistic?: OptimisticUpdaters<TApi, V>
+}
+
+/**
  * Configuration for {@link createApiComposer} to bind mutation functions.
  * Pass mutation functions for each mutation endpoint in your API structure.
+ *
+ * Mutations accept either a bare function (backward compatible) or a
+ * {@link MutationEndpointConfig} object with `invalidates` and `optimistic`.
  *
  * @typeParam TApiStructure - The API structure interface.
  *
@@ -516,8 +571,16 @@ export interface ApiMutationResult<T, V = void> {
  * ```ts
  * const config: ApiComposerConfig<MyApi> = {
  *   mutations: {
- *     createUser: (payload) => api.createUser(payload),
- *     updatePost: (payload) => api.updatePost(payload)
+ *     // Bare function (backward compat)
+ *     deleteUser: (payload) => api.deleteUser(payload),
+ *     // Config object with invalidation + optimistic
+ *     createUser: {
+ *       fn: (payload) => api.createUser(payload),
+ *       invalidates: ['listUsers'],
+ *       optimistic: {
+ *         listUsers: (vars, current) => [...(current ?? []), { id: Date.now(), ...vars }]
+ *       }
+ *     }
  *   }
  * }
  * ```
@@ -530,7 +593,9 @@ export interface ApiComposerConfig<TApiStructure> {
   }
   mutations?: {
     [K in keyof TApiStructure]?: TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
-      ? (variables: V) => Promise<{ data: R }>
+      ?
+          | ((variables: V) => Promise<{ data: R }>)
+          | MutationEndpointConfig<TApiStructure, V, R>
       : never
   }
 }
@@ -622,6 +687,6 @@ export interface UseApiQueryOptions<T = unknown> extends ApiCallOptions<T> {
 export type ComposerDeclarativeOptions<TApiStructure, K extends keyof TApiStructure> =
   TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
     ? P extends void
-      ? { enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
-      : { params: P; enabled?: boolean } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
+      ? { enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
+      : { params: P; enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
     : never

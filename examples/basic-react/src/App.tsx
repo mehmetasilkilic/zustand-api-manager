@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
 import {
   ApiQueryEndpoint,
+  ApiMutationEndpoint,
   createApiComposer,
   createApiStore,
   FetchStatus,
-  useApiQuery,
   useApiStore,
   useLoadingStates
 } from 'zustand-api-manager'
@@ -59,11 +59,6 @@ const fetchComments = () =>
     )
   })
 
-const updateUser = (user: User) =>
-  new Promise<{ data: User }>(resolve => {
-    setTimeout(() => resolve({ data: { ...user, username: user.username + ' (saved)' } }), 1500)
-  })
-
 // Second store for a separate feature domain ----------------------------------
 
 interface SecondApiStructure {
@@ -79,15 +74,32 @@ const useSecondApi = secondStore.createApiComposer<SecondApiStructure>({
 
 // Typed API structure for the default store's composer ------------------------
 
+interface CreatePostPayload {
+  title: string
+}
+
 interface DefaultApiStructure {
   getUser: ApiQueryEndpoint<{ id: number }, User>
   getPosts: ApiQueryEndpoint<void, Post[]>
+  createPost: ApiMutationEndpoint<CreatePostPayload, Post>
 }
 
 const useApi = createApiComposer<DefaultApiStructure>({
   queries: {
     getUser: (params) => fetchUser(params.id),
     getPosts: fetchPosts
+  },
+  mutations: {
+    createPost: {
+      fn: (payload) =>
+        new Promise(resolve =>
+          setTimeout(() => resolve({ data: { id: Date.now(), title: payload.title } }), 500)
+        ),
+      invalidates: ['getPosts'],
+      optimistic: {
+        getPosts: (vars, current) => [...(current ?? []), { id: Date.now(), title: vars.title }]
+      }
+    }
   }
 })
 
@@ -96,14 +108,12 @@ const useApi = createApiComposer<DefaultApiStructure>({
 /** Shows loading state for the default singleton store. */
 const DefaultStoreLoading: React.FC = () => {
   const anyLoading = useLoadingStates()
-  const userOrPostsLoading = useLoadingStates(['user', 'getPosts'])
 
   if (!anyLoading) return null
 
   return (
     <div style={{ ...bannerStyle, background: '#e6f4ff', borderColor: '#91caff' }}>
-      <strong>Default store:</strong>{' '}
-      {userOrPostsLoading ? 'User or posts loading...' : 'Something loading...'}
+      <strong>Default store:</strong> Something loading...
     </div>
   )
 }
@@ -132,115 +142,6 @@ const GlobalLoadingIndicator: React.FC = () => {
     <div style={{ ...bannerStyle, background: '#fffae6', borderColor: '#ffe58f' }}>
       <strong>Global:</strong> At least one store is loading...
     </div>
-  )
-}
-
-const DeclarativeExample: React.FC = () => {
-  const { data, status, isLoading, fetchedAt, reset } =
-    useApiQuery<User>('user', {
-      queryFn: () => fetchUser(13),
-      persist: true,
-      staleTime: 5000,
-      onSuccess: d => console.log('User loaded:', d.username),
-      onError: () => console.error('Failed to load user')
-    })
-
-  return (
-    <Card title="useApiQuery — declarative mode" hint="queryFn · staleTime · persist · auto-fetch on mount">
-      <ButtonRow>
-        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
-          Reset
-        </button>
-      </ButtonRow>
-      <Status value={status} fetchedAt={fetchedAt} />
-      {isLoading && <div>Loading...</div>}
-      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
-    </Card>
-  )
-}
-
-const ImperativeExample: React.FC = () => {
-  const { data, status, isIdle, isLoading, fetchedAt, query, reset } =
-    useApiQuery<User>('imperative-user')
-
-  const loadUser = async () => {
-    const user = await query(() => fetchUser(42), {
-      staleTime: 5000,
-      onSuccess: d => console.log('User loaded:', d.username)
-    })
-    if (user) console.log('Returned user:', user.username)
-  }
-
-  return (
-    <Card title="useApiQuery — imperative mode" hint="query() on button click · staleTime · fetchedAt">
-      <ButtonRow>
-        <button onClick={loadUser} disabled={isLoading}>
-          {isLoading ? 'Loading...' : 'Load user'}
-        </button>
-        <button onClick={reset} disabled={isIdle}>
-          Reset
-        </button>
-      </ButtonRow>
-      <Status value={status} fetchedAt={fetchedAt} />
-      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
-    </Card>
-  )
-}
-
-const DeclarativeKeyChangeExample: React.FC = () => {
-  const [userId, setUserId] = useState(1)
-
-  // Declarative mode — auto-refetches when queryFn changes via key
-  const { data, isLoading, status, fetchedAt, reset } =
-    useApiQuery<User>(`user-${userId}`, {
-      queryFn: () => fetchUser(userId),
-      staleTime: 5000
-    })
-
-  return (
-    <Card
-      title="Declarative with key change"
-      hint="queryFn · key changes trigger refetch · staleTime"
-    >
-      <ButtonRow>
-        <button onClick={() => setUserId(id => id + 1)}>
-          Next user (current: {userId})
-        </button>
-        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
-          Reset
-        </button>
-      </ButtonRow>
-      <Status value={status} fetchedAt={fetchedAt} />
-      {isLoading && <div>Loading...</div>}
-      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
-    </Card>
-  )
-}
-
-const OptimisticUpdateExample: React.FC = () => {
-  const { data, isLoading, status, query, reset } = useApiQuery<User>('optimistic-user')
-
-  const saveUser = () => {
-    const optimistic: User = { id: 42, username: 'optimistic-jane' }
-    void query(() => updateUser(optimistic), {
-      optimisticData: optimistic,
-      onSuccess: d => console.log('Saved user:', d.username)
-    })
-  }
-
-  return (
-    <Card title="Optimistic update — default store" hint="optimisticData · onSuccess">
-      <ButtonRow>
-        <button onClick={saveUser} disabled={isLoading}>
-          {isLoading ? 'Saving...' : 'Save user'}
-        </button>
-        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
-          Reset
-        </button>
-      </ButtonRow>
-      <Status value={status} />
-      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
-    </Card>
   )
 }
 
@@ -295,9 +196,82 @@ const ComposerParamChangeExample: React.FC = () => {
   )
 }
 
+const ComposerImperativeExample: React.FC = () => {
+  const { data, isIdle, isLoading, status, fetchedAt, query, reset } =
+    useApi('getUser')
+
+  const loadUser = async () => {
+    const user = await query({ id: 42 }, { staleTime: 5000 })
+    if (user) console.log('Returned user:', user.username)
+  }
+
+  return (
+    <Card title="Composer — imperative mode" hint="query() on button click · staleTime · fetchedAt">
+      <ButtonRow>
+        <button onClick={loadUser} disabled={isLoading}>
+          {isLoading ? 'Loading...' : 'Load user'}
+        </button>
+        <button onClick={reset} disabled={isIdle}>
+          Reset
+        </button>
+      </ButtonRow>
+      <Status value={status} fetchedAt={fetchedAt} />
+      <Pre>{data ? JSON.stringify(data, null, 2) : 'No data yet'}</Pre>
+    </Card>
+  )
+}
+
+const ComposerPollingExample: React.FC = () => {
+  const [enabled, setEnabled] = useState(true)
+
+  const { data: posts, isLoading, status, fetchedAt } = useApi('getPosts', {
+    polling: 5000,
+    enabled,
+    staleTime: 2000
+  })
+
+  return (
+    <Card title="Composer — polling" hint="polling: 5000 · enabled toggle · staleTime">
+      <ButtonRow>
+        <button onClick={() => setEnabled(e => !e)}>
+          {enabled ? 'Pause polling' : 'Resume polling'}
+        </button>
+      </ButtonRow>
+      <Status value={status} fetchedAt={fetchedAt} />
+      {isLoading && <div>Loading...</div>}
+      <ul>
+        {posts?.map(post => (
+          <li key={post.id}>{post.title}</li>
+        )) ?? <li>No posts loaded</li>}
+      </ul>
+    </Card>
+  )
+}
+
+const ComposerMutationExample: React.FC = () => {
+  const { mutate, isLoading, isSuccess, data, reset } = useApi('createPost')
+
+  const handleCreate = () => {
+    mutate({ title: `Post at ${new Date().toLocaleTimeString()}` })
+  }
+
+  return (
+    <Card title="Composer — mutation with invalidation" hint="createPost · invalidates getPosts · optimistic">
+      <ButtonRow>
+        <button onClick={handleCreate} disabled={isLoading}>
+          {isLoading ? 'Creating...' : 'Create Post'}
+        </button>
+        <button onClick={reset} disabled={!isSuccess}>
+          Reset
+        </button>
+      </ButtonRow>
+      {isSuccess && data && <Pre>{JSON.stringify(data, null, 2)}</Pre>}
+    </Card>
+  )
+}
+
 /** Uses the second store — completely isolated from the default store. */
 const SecondStoreExample: React.FC = () => {
-  // Declarative mode on second store's composer
   const { data: comments, isLoading, status, fetchedAt, reset, invalidate } =
     useSecondApi('getComments', { staleTime: 8000 })
 
@@ -326,28 +300,22 @@ const SecondStoreExample: React.FC = () => {
   )
 }
 
-/** Uses the second store with useApiQuery (bound version). */
-const SecondStoreHandlerExample: React.FC = () => {
-  const { data, isLoading, status, fetchedAt, query, reset } =
-    secondStore.useApiQuery<User>('user')
+const PrefetchExample: React.FC = () => {
+  const { data, isLoading, status, fetchedAt, query } = useApi('getUser')
 
-  const loadUser = async () => {
-    const user = await query(() => fetchUser(99), { staleTime: 5000 })
-    if (user) console.log('[Second store] user:', user.username)
+  const handlePrefetch = () => {
+    useApi.prefetch('getUser', { id: 99 })
+  }
+
+  const handleLoad = () => {
+    query({ id: 99 })
   }
 
   return (
-    <Card
-      title="useApiQuery — second store (same 'user' key)"
-      hint="same key name as default store — proves isolation"
-      accent="#52c41a"
-    >
+    <Card title="Prefetch" hint="useApi.prefetch() static method · preload on hover">
       <ButtonRow>
-        <button onClick={loadUser} disabled={isLoading}>
-          {isLoading ? 'Loading...' : 'Load user (id=99)'}
-        </button>
-        <button onClick={reset} disabled={status === FetchStatus.IDLE}>
-          Reset
+        <button onMouseEnter={handlePrefetch} onClick={handleLoad} disabled={isLoading}>
+          {isLoading ? 'Loading...' : 'Hover to prefetch, click to load (id=99)'}
         </button>
       </ButtonRow>
       <Status value={status} fetchedAt={fetchedAt} />
@@ -398,11 +366,10 @@ export const App: React.FC = () => {
     >
       <header style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0 }}>Zustand API Manager — Multi-Store Example</h1>
+          <h1 style={{ margin: 0 }}>Zustand API Manager — Composer-Only Example</h1>
           <p style={{ marginTop: 8 }}>
-            Declarative auto-fetching, two isolated stores, <code>useLoadingStates</code>, and{' '}
-            <code>createApiComposer</code>. Both stores use the <code>&quot;user&quot;</code> key to
-            prove store isolation.
+            Declarative auto-fetching, polling, prefetch, mutations with invalidation,
+            two isolated stores, and <code>useLoadingStates</code>.
           </p>
         </div>
         <button onClick={() => setTheme(t => (t === 'light' ? 'dark' : 'light'))}>
@@ -416,16 +383,15 @@ export const App: React.FC = () => {
         <SecondStoreLoading />
 
         <h3 style={{ margin: '0 0 12px', color: '#1677ff' }}>Default store</h3>
-        <DeclarativeExample />
-        <ImperativeExample />
-        <DeclarativeKeyChangeExample />
-        <OptimisticUpdateExample />
         <ComposerDeclarativeExample />
         <ComposerParamChangeExample />
+        <ComposerImperativeExample />
+        <ComposerPollingExample />
+        <ComposerMutationExample />
+        <PrefetchExample />
 
         <h3 style={{ margin: '24px 0 12px', color: '#52c41a' }}>Second store</h3>
         <SecondStoreExample />
-        <SecondStoreHandlerExample />
 
         <h3 style={{ margin: '24px 0 12px' }}>Bulk operations</h3>
         <ResetAllExample />

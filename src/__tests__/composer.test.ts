@@ -542,3 +542,700 @@ describe('createApiComposer — declarative mode', () => {
     expect(mockApi.createUser).not.toHaveBeenCalled()
   })
 })
+
+// ====================
+// Automatic Cache Invalidation
+// ====================
+
+describe('createApiComposer — automatic invalidation', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('mutation success triggers invalidation + refetch of active declarative queries', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [
+          { id: 1, name: 'John', email: 'john@example.com' },
+          { id: 2, name: 'Jane', email: 'jane@example.com' }
+        ]
+      })
+    )
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ data: { id: 3, ...payload } })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers']
+        }
+      }
+    })
+
+    // Mount a declarative query for listUsers
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // Mount a mutation for createUser
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    // Perform mutation
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isSuccess).toBe(true)
+    })
+
+    // listUsers should have been refetched (invalidation + active query refetch)
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('invalidation does NOT happen on mutation error', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const failingMutation = vi.fn(() => Promise.reject(new Error('Server error')))
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: failingMutation,
+          invalidates: ['listUsers']
+        }
+      }
+    })
+
+    // Mount declarative query
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // Attempt mutation (will fail)
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isError).toBe(true)
+    })
+
+    // listUsers should NOT have been refetched
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('multiple invalidated keys all refetch', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const getUserCall = vi.fn((params: { id: number }) =>
+      Promise.resolve({ data: { id: params.id, name: 'John', email: 'john@example.com' } })
+    )
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ data: { id: 3, ...payload } })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall,
+        getUser: getUserCall
+      },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers', 'getUser']
+        }
+      }
+    })
+
+    // Mount both declarative queries
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+    const { result: userResult } = renderHook(() =>
+      useModernApi('getUser', { params: { id: 1 } })
+    )
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+      expect(userResult.current.isSuccess).toBe(true)
+    })
+
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+    expect(getUserCall).toHaveBeenCalledTimes(1)
+
+    // Perform mutation
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isSuccess).toBe(true)
+    })
+
+    // Both queries should have been refetched
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+      expect(getUserCall).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('non-active (unmounted) queries are invalidated but not refetched', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ data: { id: 3, ...payload } })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers']
+        }
+      }
+    })
+
+    // Mount declarative query, then unmount it
+    const { result: listResult, unmount } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // Unmount the query — removes it from active queries
+    unmount()
+
+    // Perform mutation
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isSuccess).toBe(true)
+    })
+
+    // The cache is invalidated (fetchedAt cleared) but no refetch since query is unmounted
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+    const state = useApiStore.getState().apiStates['listUsers']
+    expect(state?.fetchedAt).toBeNull()
+  })
+
+  it('bare function config still works (backward compat)', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      mutations: {
+        createUser: mockApi.createUser
+      }
+    })
+
+    const { result } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await result.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.data).toEqual({ id: 3, name: 'Alice', email: 'alice@example.com' })
+    expect(mockApi.createUser).toHaveBeenCalledWith({ name: 'Alice', email: 'alice@example.com' })
+  })
+})
+
+// ====================
+// Cross-Endpoint Optimistic Updates
+// ====================
+
+describe('createApiComposer — cross-endpoint optimistic updates', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('optimistic data appears immediately in target query cache', async () => {
+    let resolveCreate: (value: { data: User }) => void
+    const createUserCall = vi.fn(
+      () => new Promise<{ data: User }>(resolve => { resolveCreate = resolve })
+    )
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers'],
+          optimistic: {
+            listUsers: (variables, currentData) => [
+              ...(currentData ?? []),
+              { id: 999, ...variables }
+            ]
+          }
+        }
+      }
+    })
+
+    // Mount and populate listUsers
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+
+    expect(listResult.current.data).toHaveLength(1)
+
+    // Mount mutation and trigger it (won't resolve yet)
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    act(() => {
+      mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    // Optimistic data should appear immediately
+    await waitFor(() => {
+      expect(listResult.current.data).toHaveLength(2)
+    })
+    expect(listResult.current.data?.[1]).toEqual({
+      id: 999,
+      name: 'Alice',
+      email: 'alice@example.com'
+    })
+
+    // Resolve the mutation
+    await act(async () => {
+      resolveCreate!({ data: { id: 3, name: 'Alice', email: 'alice@example.com' } })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isSuccess).toBe(true)
+    })
+  })
+
+  it('rollback on mutation error restores previous data', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const failingCreate = vi.fn(() => Promise.reject(new Error('Server error')))
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: failingCreate,
+          invalidates: ['listUsers'],
+          optimistic: {
+            listUsers: (variables, currentData) => [
+              ...(currentData ?? []),
+              { id: 999, ...variables }
+            ]
+          }
+        }
+      }
+    })
+
+    // Mount and populate listUsers
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+
+    expect(listResult.current.data).toHaveLength(1)
+
+    // Perform failing mutation
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isError).toBe(true)
+    })
+
+    // Data should be rolled back to original
+    await waitFor(() => {
+      expect(listResult.current.data).toHaveLength(1)
+    })
+    expect(listResult.current.data?.[0]).toEqual({
+      id: 1,
+      name: 'John',
+      email: 'john@example.com'
+    })
+  })
+
+  it('on success, invalidation refetch replaces optimistic data with real data', async () => {
+    let callCount = 0
+    const listUsersCall = vi.fn(() => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({
+          data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+        })
+      }
+      // After invalidation, return the server-truth including the new user
+      return Promise.resolve({
+        data: [
+          { id: 1, name: 'John', email: 'john@example.com' },
+          { id: 3, name: 'Alice', email: 'alice@example.com' }
+        ]
+      })
+    })
+
+    const createUserCall = vi.fn((payload: CreateUserPayload) =>
+      Promise.resolve({ data: { id: 3, ...payload } })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: listUsersCall
+      },
+      mutations: {
+        createUser: {
+          fn: createUserCall,
+          invalidates: ['listUsers'],
+          optimistic: {
+            listUsers: (variables, currentData) => [
+              ...(currentData ?? []),
+              { id: 999, ...variables } // optimistic ID
+            ]
+          }
+        }
+      }
+    })
+
+    // Mount and populate listUsers
+    const { result: listResult } = renderHook(() => useModernApi('listUsers', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+
+    // Perform mutation
+    const { result: mutationResult } = renderHook(() => useModernApi('createUser'))
+
+    await act(async () => {
+      await mutationResult.current.mutate({ name: 'Alice', email: 'alice@example.com' })
+    })
+
+    await waitFor(() => {
+      expect(mutationResult.current.isSuccess).toBe(true)
+    })
+
+    // After invalidation refetch, the data should reflect server truth (id: 3, not 999)
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+
+    await waitFor(() => {
+      expect(listResult.current.data).toHaveLength(2)
+      expect(listResult.current.data?.[1]?.id).toBe(3)
+    })
+  })
+})
+
+// ====================
+// Polling
+// ====================
+
+describe('createApiComposer — polling', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('polls at the given interval', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { polling: 1000 })
+    )
+
+    // Initial fetch
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // First poll tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(2)
+
+    // Second poll tick
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(3)
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('stops polling on unmount', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { polling: 1000 })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(2)
+
+    unmount()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    // Should not have called again after unmount
+    expect(listUsersCall).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
+
+  it('skips poll tick if previous request is still loading', async () => {
+    vi.useFakeTimers()
+
+    let resolveCall: (() => void) | undefined
+    let callCount = 0
+    const slowListUsers = vi.fn(() => {
+      callCount++
+      if (callCount === 2) {
+        // Second call is slow — takes longer than the poll interval
+        return new Promise<{ data: User[] }>(resolve => {
+          resolveCall = () => resolve({
+            data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+          })
+        })
+      }
+      return Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    })
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: slowListUsers }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { polling: 500 })
+    )
+
+    // Initial fetch resolves immediately
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(slowListUsers).toHaveBeenCalledTimes(1)
+
+    // First poll — starts slow request
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(slowListUsers).toHaveBeenCalledTimes(2)
+
+    // Second poll — should skip because status is LOADING
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(slowListUsers).toHaveBeenCalledTimes(2) // still 2, skipped
+
+    // Resolve the slow call
+    await act(async () => {
+      resolveCall?.()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // Next poll should fire now
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(slowListUsers).toHaveBeenCalledTimes(3)
+
+    unmount()
+    vi.useRealTimers()
+  })
+
+  it('pauses polling when enabled is false', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve({
+        data: [{ id: 1, name: 'John', email: 'john@example.com' }]
+      })
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useModernApi('listUsers', { polling: 500, enabled }),
+      { initialProps: { enabled: false } }
+    )
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(listUsersCall).not.toHaveBeenCalled()
+
+    // Enable
+    rerender({ enabled: true })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(2)
+
+    unmount()
+    vi.useRealTimers()
+  })
+})
+
+// ====================
+// Prefetch
+// ====================
+
+describe('createApiComposer — prefetch', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+  })
+
+  it('prefetch populates the cache', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser,
+        listUsers: mockApi.listUsers
+      }
+    })
+
+    await useModernApi.prefetch('getUser', { id: 1 })
+
+    const state = useApiStore.getState().apiStates['getUser']
+    expect(state?.data).toEqual({
+      id: 1,
+      name: 'John Doe',
+      email: 'john@example.com'
+    })
+    expect(mockApi.getUser).toHaveBeenCalledWith({ id: 1 })
+  })
+
+  it('prefetch for void-param endpoint works', async () => {
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        listUsers: mockApi.listUsers
+      }
+    })
+
+    await useModernApi.prefetch('listUsers')
+
+    const state = useApiStore.getState().apiStates['listUsers']
+    expect(state?.data).toHaveLength(2)
+    expect(mockApi.listUsers).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefetch does not call onSuccess/onError callbacks', async () => {
+    const onSuccess = vi.fn()
+    const onError = vi.fn()
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: {
+        getUser: mockApi.getUser
+      }
+    })
+
+    await useModernApi.prefetch('getUser', { id: 1 }, {
+      staleTime: 60_000,
+      onSuccess: onSuccess as any,
+      onError: onError as any
+    } as any)
+
+    const state = useApiStore.getState().apiStates['getUser']
+    expect(state?.data).toBeDefined()
+    // Even if someone passes callbacks, they get stripped
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+  })
+})

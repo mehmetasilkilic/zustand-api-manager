@@ -1256,10 +1256,9 @@ describe('createApiStore — custom storage', () => {
 // ── createApiStore from index (factory with bound hooks) ─────
 
 describe('createApiStore from index — factory with bound hooks', () => {
-  it('returns useStore and bound hooks', () => {
+  it('returns useStore and bound utilities', () => {
     const result = createApiStoreFromIndex({ storageKey: 'factory-test' })
     expect(result.useStore).toBeDefined()
-    expect(result.useApiQuery).toBeDefined()
     expect(result.useLoadingStates).toBeDefined()
     expect(result.createApiComposer).toBeDefined()
   })

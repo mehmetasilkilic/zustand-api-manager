@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useApiMutation } from 'zustand-api-manager'
+import { createApiComposer, ApiMutationEndpoint } from 'zustand-api-manager'
 
 interface UploadResponse {
   url: string
@@ -22,18 +22,25 @@ const api = {
   }
 }
 
+interface UploadApi {
+  uploadFile: ApiMutationEndpoint<File, UploadResponse>
+}
+
+const useApi = createApiComposer<UploadApi>({
+  mutations: {
+    uploadFile: (file) => api.uploadFile(file)
+  }
+})
+
 export default function FileUpload() {
   const [file, setFile] = useState<File | null>(null)
 
-  const { mutate, isLoading, isSuccess, data, error, reset } = useApiMutation<
-    UploadResponse,
-    File
-  >('fileUpload', api.uploadFile)
+  const { mutate, isLoading, isSuccess, data, error, reset } = useApi('uploadFile')
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
       setFile(e.target.files[0])
-      reset() // Clear previous upload state
+      reset()
     }
   }
 
@@ -44,7 +51,7 @@ export default function FileUpload() {
 
     await mutate(file, {
       signal: controller.signal,
-      timeout: 30000, // 30 second timeout
+      timeout: 30000,
       onSuccess: result => {
         console.log('File uploaded:', result.url)
       },
@@ -79,7 +86,7 @@ export default function FileUpload() {
 
       {isSuccess && data && (
         <div style={{ color: 'green' }}>
-          <p>✓ File uploaded successfully!</p>
+          <p>File uploaded successfully!</p>
           <p>
             URL: <a href={data.url}>{data.filename}</a>
           </p>
