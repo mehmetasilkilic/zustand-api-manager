@@ -314,6 +314,7 @@ function NotificationBell() {
 - After the polling interval, a new request fires — but only if the previous one has completed (no request stacking)
 - Polling stops on unmount or when `enabled` becomes `false`
 - All `ApiCallOptions` (staleTime, retry, etc.) apply to each poll tick
+- Works for both regular queries and infinite queries
 
 ### Refetch on Window Focus / Network Reconnect
 
@@ -619,7 +620,7 @@ Full type safety out of the box:
 - `ApiInfiniteQueryEndpoint<P, R, C>` — typed infinite query endpoints with cursor type
 - `InfiniteData<R, C>` — typed page and cursor arrays
 - `ApiComposerInfiniteQueryResult<R, P, C>` — typed infinite query return values
-- All exported types: `ApiState`, `ApiError`, `FetchStatus`, `ApiQueryResult`, `ApiMutationResult`, etc.
+- All exported types: `ApiState`, `ApiError`, `FetchStatus`, `ApiComposerQueryResult`, `ApiComposerMutationResult`, etc.
 
 ## Persistence in React Native
 

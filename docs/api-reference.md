@@ -250,7 +250,7 @@ Fetches the next page using the cursor from `getNextCursor(lastPage)`. Appends t
 
 When a mutation with `invalidates: ['listPosts']` succeeds, the infinite query refetches from the first page (reset behavior).
 
-**Supported declarative options:** `params`, `enabled`, `refetchOnWindowFocus`, `refetchOnReconnect`, `gcTime`.
+**Supported declarative options:** `params`, `enabled`, `polling`, `refetchOnWindowFocus`, `refetchOnReconnect`, `gcTime`.
 
 ---
 

@@ -245,7 +245,7 @@ Zustand is the only peer dependency:
 {
   "dependencies": {
     "zustand": "^5.0.0",
-    "zustand-api-manager": "^3.1.0"
+    "zustand-api-manager": "^2.0.0"
   }
 }
 ```
