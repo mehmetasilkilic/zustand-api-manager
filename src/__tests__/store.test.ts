@@ -1543,3 +1543,301 @@ describe('persistence rehydration', () => {
     expect(store2.useStore.getState().apiStates['ephemeral']).toBeUndefined()
   })
 })
+
+// ── cancelRequest ────────────────────────────────────────────
+
+describe('cancelRequest', () => {
+  it('cancels an in-flight request with ABORT_ERR', async () => {
+    const apiCall = () => new Promise<string>(() => {}) // never resolves
+    const promise = getState().handleApi('users', apiCall)
+
+    getState().cancelRequest('users')
+    await promise
+
+    const state = getState().apiStates['users']
+    expect(state.status).toBe(FetchStatus.ERROR)
+    expect(state.error!.code).toBe('ABORT_ERR')
+  })
+
+  it('works when user also provides a signal', async () => {
+    const controller = new AbortController()
+    const apiCall = () => new Promise<string>(() => {})
+
+    const promise = getState().handleApi('users', apiCall, {
+      signal: controller.signal
+    })
+
+    // cancelRequest should work even though user signal is also present
+    getState().cancelRequest('users')
+    await promise
+
+    const state = getState().apiStates['users']
+    expect(state.status).toBe(FetchStatus.ERROR)
+    expect(state.error!.code).toBe('ABORT_ERR')
+  })
+
+  it('is a no-op for unknown keys', () => {
+    // Should not throw
+    getState().cancelRequest('unknown')
+  })
+
+  it('calls onError with ABORT_ERR', async () => {
+    const onError = vi.fn()
+    const apiCall = () => new Promise<string>(() => {})
+
+    const promise = getState().handleApi('users', apiCall, { onError })
+
+    getState().cancelRequest('users')
+    await promise
+
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'ABORT_ERR' }))
+  })
+})
+
+// ── cancelAll ────────────────────────────────────────────────
+
+describe('cancelAll', () => {
+  it('cancels all in-flight requests', async () => {
+    const apiCall = () => new Promise<string>(() => {})
+
+    const promise1 = getState().handleApi('users', apiCall)
+    const promise2 = getState().handleApi('posts', apiCall)
+
+    getState().cancelAll()
+    await Promise.all([promise1, promise2])
+
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['users'].error!.code).toBe('ABORT_ERR')
+    expect(getState().apiStates['posts'].status).toBe(FetchStatus.ERROR)
+    expect(getState().apiStates['posts'].error!.code).toBe('ABORT_ERR')
+  })
+
+  it('is a no-op when no requests are in-flight', () => {
+    // Should not throw
+    getState().cancelAll()
+  })
+
+  it('newly started requests after cancelAll are not affected', async () => {
+    const hangingCall = () => new Promise<string>(() => {})
+    const promise1 = getState().handleApi('users', hangingCall)
+
+    getState().cancelAll()
+    await promise1
+
+    // Start a new request — it should succeed
+    const freshCall = () => Promise.resolve('fresh')
+    const result = await getState().handleApi('users', freshCall)
+    expect(result).toBe('fresh')
+    expect(getState().apiStates['users'].status).toBe(FetchStatus.SUCCESS)
+  })
+})
+
+// ── handleApi — revalidateOnStale ────────────────────────────
+
+describe('handleApi — revalidateOnStale', () => {
+  it('returns stale data immediately and refetches in background', async () => {
+    vi.useFakeTimers()
+    const apiCall = vi.fn()
+      .mockResolvedValueOnce('first')
+      .mockResolvedValueOnce('refreshed')
+
+    // First call populates cache
+    await getState().handleApi('users', apiCall, { staleTime: 1000 })
+    expect(getState().apiStates['users'].data).toBe('first')
+
+    // Advance past staleTime
+    vi.advanceTimersByTime(1500)
+
+    // Second call with revalidateOnStale
+    const result = await getState().handleApi('users', apiCall, {
+      staleTime: 1000,
+      revalidateOnStale: true
+    })
+
+    // Should return stale data immediately
+    expect(result).toBe('first')
+
+    // Wait for background refetch to settle
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(getState().apiStates['users'].data).toBe('refreshed')
+    expect(apiCall).toHaveBeenCalledTimes(2)
+
+    vi.useRealTimers()
+  })
+
+  it('does not enter infinite loop', async () => {
+    const apiCall = vi.fn()
+      .mockResolvedValueOnce('first')
+      .mockResolvedValueOnce('second')
+      .mockResolvedValueOnce('third')
+
+    await getState().handleApi('users', apiCall, { staleTime: 0 })
+
+    const result = await getState().handleApi('users', apiCall, {
+      staleTime: 0,
+      revalidateOnStale: true
+    })
+
+    expect(result).toBe('first')
+    // Wait for background refetch
+    await new Promise(resolve => setTimeout(resolve, 50))
+    // Should only call twice (initial + one background), not infinitely
+    expect(apiCall).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not trigger when data is fresh', async () => {
+    const apiCall = vi.fn(() => Promise.resolve('data'))
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+
+    // Within staleTime — should return cached data without background refetch
+    const result = await getState().handleApi('users', apiCall, {
+      staleTime: 60_000,
+      revalidateOnStale: true
+    })
+
+    expect(result).toBe('data')
+    // Only called once — cache hit, not stale-while-revalidate
+    expect(apiCall).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── handleApi — onStart callback ─────────────────────────────
+
+describe('handleApi — onStart', () => {
+  it('calls onStart before the request executes', async () => {
+    const order: string[] = []
+    const apiCall = () => {
+      order.push('apiCall')
+      return Promise.resolve('ok')
+    }
+
+    await getState().handleApi('users', apiCall, {
+      onStart: () => order.push('onStart')
+    })
+
+    expect(order).toEqual(['onStart', 'apiCall'])
+  })
+
+  it('calls onStart even on cache hit', async () => {
+    const onStart = vi.fn()
+    const apiCall = () => Promise.resolve('data')
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('users', apiCall, { staleTime: 60_000, onStart })
+
+    expect(onStart).toHaveBeenCalledOnce()
+  })
+})
+
+// ── handleApi — onCacheHit callback ──────────────────────────
+
+describe('handleApi — onCacheHit', () => {
+  it('calls onCacheHit with cached data on staleTime hit', async () => {
+    const onCacheHit = vi.fn()
+    const apiCall = () => Promise.resolve('cached-data')
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('users', apiCall, { staleTime: 60_000, onCacheHit })
+
+    expect(onCacheHit).toHaveBeenCalledOnce()
+    expect(onCacheHit).toHaveBeenCalledWith('cached-data')
+  })
+
+  it('does not call onCacheHit when data is stale', async () => {
+    vi.useFakeTimers()
+    const onCacheHit = vi.fn()
+    const apiCall = () => Promise.resolve('data')
+
+    await getState().handleApi('users', apiCall, { staleTime: 1000 })
+
+    vi.advanceTimersByTime(1500)
+
+    await getState().handleApi('users', apiCall, { staleTime: 1000, onCacheHit })
+
+    expect(onCacheHit).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+})
+
+// ── handleApi — onSettled on cache hit ───────────────────────
+
+describe('handleApi — onSettled on cache hit', () => {
+  it('calls onSettled when returning cached data', async () => {
+    const onSettled = vi.fn()
+    const apiCall = () => Promise.resolve('data')
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('users', apiCall, { staleTime: 60_000, onSettled })
+
+    expect(onSettled).toHaveBeenCalledOnce()
+  })
+
+  it('calls onSettled in correct order on cache hit', async () => {
+    const order: string[] = []
+    const apiCall = () => Promise.resolve('data')
+
+    await getState().handleApi('users', apiCall, { staleTime: 60_000 })
+    await getState().handleApi('users', apiCall, {
+      staleTime: 60_000,
+      onStart: () => order.push('start'),
+      onCacheHit: () => order.push('cacheHit'),
+      onSettled: () => order.push('settled')
+    })
+
+    expect(order).toEqual(['start', 'cacheHit', 'settled'])
+  })
+})
+
+// ── handleApi — onBeforeRetry callback ───────────────────────
+
+describe('handleApi — onBeforeRetry', () => {
+  it('calls onBeforeRetry before each retry attempt', async () => {
+    vi.useFakeTimers()
+    const onBeforeRetry = vi.fn()
+    const apiCall = vi.fn(() => Promise.reject(new Error('fail')))
+
+    const promise = getState().handleApi('users', apiCall, {
+      retry: 2,
+      onBeforeRetry
+    })
+
+    await vi.runAllTimersAsync()
+    await promise
+
+    expect(onBeforeRetry).toHaveBeenCalledTimes(2)
+    expect(onBeforeRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'fail' }),
+      0
+    )
+    expect(onBeforeRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'fail' }),
+      1
+    )
+    vi.useRealTimers()
+  })
+
+  it('does not call onBeforeRetry on the final attempt', async () => {
+    vi.useFakeTimers()
+    const onBeforeRetry = vi.fn()
+    const apiCall = vi.fn(() => Promise.reject(new Error('fail')))
+
+    const promise = getState().handleApi('users', apiCall, {
+      retry: 1,
+      onBeforeRetry
+    })
+
+    await vi.runAllTimersAsync()
+    await promise
+
+    // Only 1 retry = 1 onBeforeRetry call (before the retry, not the initial attempt)
+    expect(onBeforeRetry).toHaveBeenCalledTimes(1)
+    expect(onBeforeRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'fail' }),
+      0
+    )
+    vi.useRealTimers()
+  })
+})

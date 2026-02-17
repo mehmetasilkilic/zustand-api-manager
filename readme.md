@@ -6,23 +6,29 @@
 [![license](https://img.shields.io/npm/l/zustand-api-manager.svg)](https://github.com/mehmetasilkilic/zustand-api-manager/blob/main/LICENSE)
 [![GitHub](https://img.shields.io/github/stars/mehmetasilkilic/zustand-api-manager?style=social)](https://github.com/mehmetasilkilic/zustand-api-manager)
 
-A type-safe API layer for Zustand. Define your entire API as a typed interface, get one hook.
+A type-safe API state management layer for Zustand. Define your API as a typed interface, get a single hook with queries, mutations, caching, retries, optimistic updates, and more — all living natively in your Zustand store.
 
-## Why This Instead of TanStack Query?
+## Features
 
-| | Zustand API Manager | TanStack Query |
-|---|---|---|
-| **One hook for your entire API** | `useApi('getUser', { params: { id } })` | Separate `useQuery` / `useMutation` per endpoint |
-| **Declarative cache invalidation** | `invalidates: ['listUsers']` at definition | `queryClient.invalidateQueries()` imperative calls scattered across components |
-| **Cross-endpoint optimistic updates** | `optimistic: { listUsers: (vars, data) => ... }` at definition | Manual `queryClient.setQueryData` + rollback boilerplate |
-| **Built-in polling** | `polling: 10_000` declarative option | `refetchInterval` option |
-| **Refetch on focus / reconnect** | `refetchOnWindowFocus: true` per query or global | `refetchOnWindowFocus` global default |
-| **Infinite queries** | `ApiInfiniteQueryEndpoint` + `fetchNextPage` | `useInfiniteQuery` separate hook |
-| **Garbage collection** | `gcTime` per query or global (default 5min) | `gcTime` per query (default 5min) |
-| **Multi-store isolation** | `createApiStore()` — fully isolated per-feature stores | Single `QueryClient`, workarounds for isolation |
-| **Zustand-native** | Built on Zustand — share state with your existing stores | Separate cache layer, doesn't integrate with Zustand |
-| **Zero extra peer deps** | Only `zustand` + `react` | Only `react` |
-| **Bundle size** | ~10KB gzipped | ~40KB gzipped |
+- **Type-safe API layer** — define endpoints as TypeScript interfaces, get full inference for params, responses, and options
+- **Single hook** — `useApi('getUser', { params: { id } })` for queries, `useApi('createUser')` for mutations
+- **Declarative cache invalidation** — `invalidates: ['listUsers']` defined at the composer level, automatic refetch of active queries
+- **Cross-endpoint optimistic updates** — update related query caches on mutation with automatic rollback on error
+- **Caching & stale time** — skip redundant refetches with configurable `staleTime`
+- **Stale-while-revalidate** — return cached data immediately, refetch in the background
+- **Retries** — exponential backoff, custom backoff functions, conditional retry via `shouldRetry`
+- **Abort & timeout** — `AbortSignal` support and auto-timeout
+- **Request deduplication** — concurrent calls share a single in-flight promise
+- **Polling** — automatic refetching at configurable intervals
+- **Refetch on focus / reconnect** — auto-refetch when the tab becomes visible or the network reconnects
+- **Infinite queries** — cursor-based pagination with `fetchNextPage` and `hasNextPage`
+- **Garbage collection** — automatic cleanup of unmounted query caches
+- **Multi-store isolation** — fully isolated per-feature stores via `createApiStore()`
+- **Persistence** — optional `localStorage` or custom async storage (React Native compatible)
+- **Middleware** — composable middleware chain and global error handlers
+- **Prefetch** — preload data outside of React components
+- **SSR-safe** — no-op when `window` is unavailable
+- **Zero extra deps** — only `zustand` + `react` as peer dependencies
 
 ## Quick Start
 
@@ -101,7 +107,7 @@ function CreateUserForm() {
 - [Configuration & Options](#configuration--options)
 - [Middleware & Error Handling](#middleware--error-handling)
 - [Store API Reference](#store-api-reference)
-- [Migration from TanStack Query / SWR / RTK Query](#migration-from-tanstack-query--swr--rtk-query)
+- [Migration](#migration)
 - [Performance](#performance)
 - [TypeScript Support](#typescript-support)
 - [Documentation](#documentation)
@@ -581,24 +587,9 @@ const {
 });
 ```
 
-## Migration from TanStack Query / SWR / RTK Query
+## Migration
 
-See the [Migration Guide](./docs/migration.md) for detailed instructions.
-
-**Quick comparison:**
-
-```typescript
-// TanStack Query
-const { data } = useQuery({ queryKey: ['users'], queryFn: fetchUsers });
-const mutation = useMutation({ mutationFn: createUser,
-  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
-});
-
-// Zustand API Manager (composer)
-const { data } = useApi('listUsers', {});
-const { mutate } = useApi('createUser');
-// invalidation is declarative — defined once at the composer level
-```
+See the [Migration Guide](./docs/migration.md) for detailed instructions on migrating from TanStack Query, SWR, or RTK Query.
 
 ## Performance
 

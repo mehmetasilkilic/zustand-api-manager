@@ -15,10 +15,8 @@ import {
   MutationEndpointConfig
 } from './types'
 import { compositeKey } from './utils'
+import { QueryTracker } from './queryTracker'
 import type { StoreApi, UseBoundStore } from 'zustand'
-
-/** Default GC time: 5 minutes (matches React Query). */
-const DEFAULT_GC_TIME = 300_000
 
 /** Keys excluded when forwarding declarative options to ApiCallOptions. */
 const DECLARATIVE_ONLY_KEYS = new Set([
@@ -149,86 +147,10 @@ export function createApiComposer<TApiStructure>(
 
   // ── Active query tracking (shared across all hook instances) ──
 
-  // key = composite cache key (e.g. "getUser::{"id":1}")
-  // value = { endpoint, params, gcTime, refetchFn }
-  const activeQueries = new Map<string, {
-    endpoint: string
-    params: unknown
-    gcTime: number
-    refCount: number
-    refetchFn?: () => Promise<unknown>
-  }>()
-
-  // key = bare endpoint name, value = set of active composite keys
-  const activeKeysByEndpoint = new Map<string, Set<string>>()
-
-  // ── Garbage collection timers ──
-  const gcTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-  function registerActiveQuery(
-    endpoint: string,
-    cacheKey: string,
-    params: unknown,
-    gcTime: number,
-    refetchFn?: () => Promise<unknown>
-  ) {
-    // Cancel any pending GC timer (query re-mounted before GC fired)
-    const existingTimer = gcTimers.get(cacheKey)
-    if (existingTimer != null) {
-      clearTimeout(existingTimer)
-      gcTimers.delete(cacheKey)
-    }
-
-    const existing = activeQueries.get(cacheKey)
-    if (existing) {
-      existing.refCount++
-      existing.refetchFn = refetchFn
-    } else {
-      activeQueries.set(cacheKey, { endpoint, params, gcTime, refCount: 1, refetchFn })
-    }
-
-    let keys = activeKeysByEndpoint.get(endpoint)
-    if (!keys) {
-      keys = new Set()
-      activeKeysByEndpoint.set(endpoint, keys)
-    }
-    keys.add(cacheKey)
-  }
-
-  function unregisterActiveQuery(endpoint: string, cacheKey: string) {
-    const entry = activeQueries.get(cacheKey)
-    if (entry) {
-      entry.refCount--
-      if (entry.refCount > 0) return // Other components still using this query
-    }
-
-    activeQueries.delete(cacheKey)
-    const keys = activeKeysByEndpoint.get(endpoint)
-    if (keys) {
-      keys.delete(cacheKey)
-      if (keys.size === 0) activeKeysByEndpoint.delete(endpoint)
-    }
-
-    // Start GC timer if applicable
-    const gcTime = entry?.gcTime ?? DEFAULT_GC_TIME
-    if (gcTime > 0 && gcTime !== Infinity) {
-      const store = config?.store ?? useApiStore
-      const timer = setTimeout(() => {
-        gcTimers.delete(cacheKey)
-        store.getState().resetApiState(cacheKey)
-      }, gcTime)
-      gcTimers.set(cacheKey, timer)
-    }
-  }
-
-  /** Resolve the effective gcTime for a declarative options object. */
-  function resolveGcTime(opts: Record<string, unknown> | undefined): number {
-    const local = opts?.gcTime as number | undefined
-    if (local != null) return local
-    const global = getGlobalConfig().defaultGcTime
-    if (global != null) return global
-    return DEFAULT_GC_TIME
-  }
+  const tracker = new QueryTracker((cacheKey) => {
+    const store = config?.store ?? useApiStore
+    store.getState().resetApiState(cacheKey)
+  })
 
   /** Setup focus/reconnect subscriptions based on declarative options. */
   function setupFocusReconnect(
@@ -267,7 +189,7 @@ export function createApiComposer<TApiStructure>(
         const updater = optimistic[qKey]
         if (!updater) continue
 
-        const compositeKeys = activeKeysByEndpoint.get(qKey)
+        const compositeKeys = tracker.activeKeysByEndpoint.get(qKey)
         if (compositeKeys) {
           for (const ck of compositeKeys) {
             const currentState = store.apiStates[ck]
@@ -297,7 +219,7 @@ export function createApiComposer<TApiStructure>(
           const keysToInvalidate: string[] = [...invalidates]
 
           for (const endpoint of invalidates) {
-            const composites = activeKeysByEndpoint.get(endpoint)
+            const composites = tracker.activeKeysByEndpoint.get(endpoint)
             if (composites) {
               keysToInvalidate.push(...composites)
             }
@@ -306,10 +228,10 @@ export function createApiComposer<TApiStructure>(
           store.invalidateApis(keysToInvalidate)
 
           for (const endpoint of invalidates) {
-            const composites = activeKeysByEndpoint.get(endpoint)
+            const composites = tracker.activeKeysByEndpoint.get(endpoint)
             if (composites) {
               for (const ck of composites) {
-                const active = activeQueries.get(ck)
+                const active = tracker.activeQueries.get(ck)
                 if (active?.refetchFn) {
                   active.refetchFn()
                 } else {
@@ -535,7 +457,7 @@ export function createApiComposer<TApiStructure>(
         const cacheKey = compositeKey(key as string, params)
         const cfg = infiniteConfigRef.current!
         const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-        const gcTime = resolveGcTime(opts)
+        const gcTime = tracker.resolveGcTime(opts)
 
         // Create the initial fetch function (fetches first page)
         const initialFetch = () =>
@@ -544,7 +466,7 @@ export function createApiComposer<TApiStructure>(
             return { pages: [page], pageParams: [cfg.initialCursor] } as InfiniteData<unknown, unknown>
           })
 
-        registerActiveQuery(key as string, cacheKey, params, gcTime, initialFetch)
+        tracker.register(key as string, cacheKey, params, gcTime, initialFetch)
 
         // Trigger initial fetch
         initialFetch()
@@ -564,14 +486,14 @@ export function createApiComposer<TApiStructure>(
 
           const intervalId = setInterval(tick, pollingInterval)
           return () => {
-            unregisterActiveQuery(key as string, cacheKey)
+            tracker.unregister(key as string, cacheKey)
             clearInterval(intervalId)
             cleanups.forEach(fn => fn())
           }
         }
 
         return () => {
-          unregisterActiveQuery(key as string, cacheKey)
+          tracker.unregister(key as string, cacheKey)
           cleanups.forEach(fn => fn())
         }
       }, [key, serializedParams, enabled, isDeclarativeMode, useStore])
@@ -637,7 +559,7 @@ export function createApiComposer<TApiStructure>(
       const params = declParams
       const cacheKey = compositeKey(key as string, params)
       const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-      const gcTime = resolveGcTime(opts)
+      const gcTime = tracker.resolveGcTime(opts)
       const apiOptions = extractApiOptions(opts)
 
       // Create refetch function for invalidation
@@ -645,7 +567,7 @@ export function createApiComposer<TApiStructure>(
         useStore.getState().handleApi(cacheKey, () => queryFnRef.current!(params), apiOptions)
 
       // Register in active queries for invalidation refetch
-      registerActiveQuery(key as string, cacheKey, params, gcTime, refetch)
+      tracker.register(key as string, cacheKey, params, gcTime, refetch)
 
       // Trigger initial fetch
       refetch()
@@ -678,7 +600,7 @@ export function createApiComposer<TApiStructure>(
 
         const intervalId = setInterval(tick, pollingInterval)
         return () => {
-          unregisterActiveQuery(key as string, cacheKey)
+          tracker.unregister(key as string, cacheKey)
           clearInterval(intervalId)
           cleanups.forEach(fn => fn())
         }
@@ -686,7 +608,7 @@ export function createApiComposer<TApiStructure>(
 
       // Cleanup: deregister from active queries
       return () => {
-        unregisterActiveQuery(key as string, cacheKey)
+        tracker.unregister(key as string, cacheKey)
         cleanups.forEach(fn => fn())
       }
     }, [key, serializedParams, enabled, isDeclarativeMode, useStore])

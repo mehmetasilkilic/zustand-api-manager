@@ -282,8 +282,8 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 
       // Cache hit: return fresh data without refetching
       if (isFresh) {
-        // Call onCacheHit lifecycle hook
         mergedOptions.onCacheHit?.(existing.data as T)
+        mergedOptions.onSettled?.()
         return Promise.resolve(existing.data as T)
       }
 
@@ -311,21 +311,29 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         const globalConfig = getGlobalConfig()
         const { retry = 0, optimisticData } = mergedOptions
 
-        // Create an internal controller for cancelAll support
+        // Create an internal controller for cancelAll/cancelRequest support.
+        // All abort sources (user signal, cancelRequest, timeout) funnel through
+        // this single controller so that cancelRequest works even when the caller
+        // also supplies their own AbortSignal.
         const internalController = new AbortController()
         activeControllers.set(key, internalController)
 
-        // Combine user signal with internal controller and timeout
-        const combinedSignal = mergedOptions.signal || internalController.signal
-        const timeout = createTimeoutSignal(mergedOptions.timeout, combinedSignal)
-        const effectiveSignal = timeout.signal
-
-        // Listen for internal controller abort
+        // Forward user signal abort → internal controller
         if (mergedOptions.signal) {
-          mergedOptions.signal.addEventListener('abort', () => internalController.abort(), {
-            once: true
-          })
+          if (mergedOptions.signal.aborted) {
+            internalController.abort()
+          } else {
+            mergedOptions.signal.addEventListener(
+              'abort',
+              () => internalController.abort(),
+              { once: true }
+            )
+          }
         }
+
+        // Build the effective signal: internal controller + optional timeout
+        const timeout = createTimeoutSignal(mergedOptions.timeout, internalController.signal)
+        const effectiveSignal = timeout.signal
 
         const effectiveOptions = { ...mergedOptions, signal: effectiveSignal }
 
