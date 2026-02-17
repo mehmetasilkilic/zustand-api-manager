@@ -7,6 +7,8 @@ Common issues and their solutions.
 - [State Not Updating](#state-not-updating)
 - [Infinite Loops](#infinite-loops)
 - [Cache Issues](#cache-issues)
+- [Garbage Collection Issues](#garbage-collection-issues)
+- [Infinite Query Issues](#infinite-query-issues)
 - [TypeScript Errors](#typescript-errors)
 - [Performance Issues](#performance-issues)
 - [SSR Problems](#ssr-problems)
@@ -20,7 +22,7 @@ Common issues and their solutions.
 
 **Problem**: Component doesn't update when API call completes.
 
-**Solution**: Ensure you're using the hook, not just calling store methods:
+**Solution**: Ensure you're using the composer hook, not just calling store methods:
 
 ```typescript
 // ❌ Wrong - store method doesn't subscribe
@@ -28,14 +30,12 @@ const handleClick = () => {
   useApiStore.getState().handleApi('users', fetchUsers)
 }
 
-// ✅ Correct - use the hook with declarative mode
-const { data } = useApiQuery('users', {
-  queryFn: () => fetchUsers()
-})
+// ✅ Correct - use declarative mode
+const { data } = useApi('listUsers', {})
 
-// ✅ Or use the hook imperatively
-const { query } = useApiQuery('users')
-const handleClick = () => query(() => fetchUsers())
+// ✅ Or use imperative mode
+const { query } = useApi('listUsers')
+const handleClick = () => query()
 ```
 
 ### Data Persisted Incorrectly
@@ -46,10 +46,10 @@ const handleClick = () => query(() => fetchUsers())
 
 ```typescript
 // Persist
-useApiQuery('user', { queryFn: fetchUser, persist: true })
+const { data } = useApi('getUser', { params: { id: 1 }, persist: true })
 
 // Don't persist (default)
-useApiQuery('user', { queryFn: fetchUser })
+const { data } = useApi('getUser', { params: { id: 1 } })
 ```
 
 ---
@@ -64,20 +64,20 @@ useApiQuery('user', { queryFn: fetchUser })
 
 ```typescript
 // ✅ Best - declarative mode handles fetching automatically
-const { data } = useApiQuery('user', {
-  queryFn: () => fetchUser(userId),
+const { data } = useApi('getUser', {
+  params: { id: userId },
   staleTime: 60_000
 })
 
 // ✅ Also fine - query is stable in deps
-const { query } = useApiQuery('user')
+const { query } = useApi('getUser')
 useEffect(() => {
-  query(() => fetchUser(userId))
+  query({ id: userId })
 }, [userId, query])
 
 // ❌ Wrong - missing dependency
 useEffect(() => {
-  query(() => fetchUser(userId))
+  query({ id: userId })
 }, []) // ESLint warning
 ```
 
@@ -85,12 +85,13 @@ useEffect(() => {
 
 **Problem**: Polling causes too many requests.
 
-**Solution**: Use `enabled` option or check loading state:
+**Solution**: Use `enabled` option:
 
 ```typescript
-// Conditional polling
-const { data } = usePolling('data', fetchData, 5000, {
-  enabled: isActive // Only poll when active
+// Conditional polling — pauses when inactive
+const { data } = useApi('getData', {
+  polling: 5_000,
+  enabled: isActive
 })
 ```
 
@@ -102,39 +103,129 @@ const { data } = usePolling('data', fetchData, 5000, {
 
 **Problem**: Old data shown instead of fresh data.
 
-**Solution**: Invalidate cache or adjust `staleTime`:
+**Solution**: Use declarative invalidation or `refetchOnWindowFocus`:
 
 ```typescript
-// Invalidate after mutation
-const { mutate } = useApiMutation('updateUser', updateUser)
-
-await mutate(data, {
-  onSuccess: () => {
-    useApiStore.getState().invalidateApi('user')
+// ✅ Best - declarative invalidation at composer level
+const useApi = createApiComposer<MyApi>({
+  queries: { getUser: (params) => api.getUser(params) },
+  mutations: {
+    updateUser: {
+      fn: (payload) => api.updateUser(payload),
+      invalidates: ['getUser']  // auto-invalidates on success
+    }
   }
 })
 
+// ✅ Also good - refetch when user returns to tab
+const { data } = useApi('getUser', {
+  params: { id: 1 },
+  refetchOnWindowFocus: true
+})
+
 // Or use shorter staleTime
-useApiQuery('user', { queryFn: fetchUser, staleTime: 5_000 })
+const { data } = useApi('getUser', { params: { id: 1 }, staleTime: 5_000 })
 ```
 
 ### Cache Not Working
 
 **Problem**: Requests not cached despite `staleTime`.
 
-**Solution**: Ensure consistent keys and proper `fetchedAt`:
+**Solution**: Ensure consistent params. The composer uses composite keys (`endpoint::JSON(params)`):
 
 ```typescript
-// ✅ Consistent key
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1),
-  staleTime: 60_000
+// ✅ Same params = same cache key
+const { data } = useApi('getUser', { params: { id: 1 }, staleTime: 60_000 })
+
+// ❌ Different params = different cache entries
+useApi('getUser', { params: { id: 1 } })  // cache key: getUser::{"id":1}
+useApi('getUser', { params: { id: 2 } })  // cache key: getUser::{"id":2}
+```
+
+---
+
+## Garbage Collection Issues
+
+### Cache Disappears After Unmount
+
+**Problem**: Query data is gone when navigating back to a page.
+
+**Solution**: The default `gcTime` is 5 minutes. If you navigate back after that, the cache has been cleaned up. Increase `gcTime`:
+
+```typescript
+// Keep cache longer
+const { data } = useApi('getUser', {
+  params: { id: 1 },
+  gcTime: 600_000  // 10 minutes
 })
 
-// ❌ Different keys = different cache
-useApiQuery('user-1', { queryFn: () => fetchUser(1) })
-useApiQuery('user-2', { queryFn: () => fetchUser(1) }) // separate cache!
+// Disable GC entirely
+const { data } = useApi('getSettings', { gcTime: Infinity })
+
+// Or set globally
+configureApiStore({ defaultGcTime: 600_000 })
 ```
+
+### Cache Not Being Cleaned Up
+
+**Problem**: Memory grows as user navigates between many different queries.
+
+**Solution**: Ensure you're using declarative mode (passing a second argument). GC only applies to declarative queries. Check that `gcTime` is not set to `Infinity` or `0`:
+
+```typescript
+// ✅ GC active - declarative mode
+const { data } = useApi('getUser', { params: { id: 1 } })
+
+// ❌ No GC - observer mode (no second argument)
+const { data } = useApi('getUser')
+```
+
+---
+
+## Infinite Query Issues
+
+### Pages Not Accumulating
+
+**Problem**: Each fetch replaces the previous page instead of appending.
+
+**Solution**: Ensure you're using `ApiInfiniteQueryEndpoint` (not `ApiQueryEndpoint`) and the endpoint is configured in `infiniteQueries` (not `queries`):
+
+```typescript
+// ✅ Correct
+interface MyApi {
+  listPosts: ApiInfiniteQueryEndpoint<{ userId: number }, Post[], string>
+}
+
+const useApi = createApiComposer<MyApi>({
+  infiniteQueries: {
+    listPosts: {
+      queryFn: (params, cursor) => api.listPosts(params.userId, cursor),
+      getNextCursor: (lastPage) => lastPage.nextCursor ?? null
+    }
+  }
+})
+```
+
+### hasNextPage Always False
+
+**Problem**: `hasNextPage` is `false` even when more pages exist.
+
+**Solution**: Check that `getNextCursor` returns a non-null value when there are more pages:
+
+```typescript
+// ✅ Correct - returns null when no more pages
+getNextCursor: (lastPage) => lastPage.nextCursor ?? null
+
+// ❌ Wrong - always returns undefined (falsy)
+getNextCursor: (lastPage) => lastPage.nextCursor
+// If nextCursor is undefined when present, hasNextPage will be false
+```
+
+### Invalidation Refetches All Pages
+
+**Problem**: After a mutation invalidates an infinite query, all pages are lost and only the first page is refetched.
+
+**Solution**: This is the intended behavior. When an infinite query is invalidated (e.g., by a mutation's `invalidates`), it refetches from the first page to ensure data consistency. The user can then load more pages again with `fetchNextPage()`.
 
 ---
 
@@ -144,33 +235,32 @@ useApiQuery('user-2', { queryFn: () => fetchUser(1) }) // separate cache!
 
 **Problem**: `data` type is `unknown`.
 
-**Solution**: Provide generic type parameter:
+**Solution**: The composer automatically infers types from your API structure:
 
 ```typescript
-// ✅ Correct
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1)
+// ✅ Types are inferred from the interface
+interface MyApi {
+  getUser: ApiQueryEndpoint<{ id: number }, User>
+}
+
+const useApi = createApiComposer<MyApi>({
+  queries: { getUser: (params) => api.getUser(params) }
 })
 
-// ❌ Wrong
-const { data } = useApiQuery('user', {
-  queryFn: () => fetchUser(1)
-}) // data is unknown
+const { data } = useApi('getUser', { params: { id: 1 } })
+// data is User | null ✅
 ```
 
 ### ApiCallOptions Error
 
 **Problem**: Options type mismatch.
 
-**Solution**: Ensure callback types match data type:
+**Solution**: Ensure callback types match the endpoint's response type:
 
 ```typescript
-interface User { name: string }
-
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1),
-  // ✅ Correct - data is typed as User
-  onSuccess: (data) => console.log(data.name),
+const { data } = useApi('getUser', {
+  params: { id: 1 },
+  onSuccess: (data) => console.log(data.name)  // data is typed as User
 })
 ```
 
@@ -182,11 +272,11 @@ const { data } = useApiQuery<User>('user', {
 
 **Problem**: Component renders unnecessarily.
 
-**Solution**: Hook only subscribes to its key:
+**Solution**: The composer hook only subscribes to its specific cache key:
 
 ```typescript
-// ✅ Only re-renders when 'user' changes
-const { data } = useApiQuery('user', { queryFn: fetchUser })
+// ✅ Only re-renders when 'getUser' state changes
+const { data } = useApi('getUser', { params: { id: 1 } })
 
 // ❌ Re-renders on any state change
 const allState = useApiStore(state => state.apiStates)
@@ -194,9 +284,9 @@ const allState = useApiStore(state => state.apiStates)
 
 ### Memory Leaks
 
-**Problem**: Listeners not cleaned up.
+**Problem**: Cache entries accumulate over time.
 
-**Solution**: Store returns unsubscribe functions:
+**Solution**: GC is enabled by default (5 minutes). For custom listeners, use unsubscribe functions:
 
 ```typescript
 useEffect(() => {
@@ -218,7 +308,7 @@ useEffect(() => {
 
 **Problem**: `localStorage is not defined` on server.
 
-**Solution**: Library is SSR-safe by default, but ensure:
+**Solution**: Library is SSR-safe by default (including `onWindowFocus` and `onReconnect` which are no-ops on the server). For custom storage:
 
 ```typescript
 // ✅ Safe - uses SSR-safe storage
@@ -238,12 +328,12 @@ const storage = typeof window !== 'undefined'
 
 ```typescript
 // ❌ Can cause hydration issues
-useApiQuery('user', { queryFn: fetchUser, persist: true })
+const { data } = useApi('getUser', { params: { id: 1 }, persist: true })
 
 // ✅ Better - only persist after user action
-const { query } = useApiQuery('user')
+const { query } = useApi('getUser')
 const handleSave = () => {
-  query(() => saveUser(data), { persist: true })
+  query({ id: 1 }, { persist: true })
 }
 ```
 
@@ -308,12 +398,14 @@ const { useStore } = createApiStore({
 })
 ```
 
-### Add Logging
+### Add Logging via Middleware
 
 ```typescript
-configureApiStore({
-  onSuccess: (data, key) => console.log(`${key}:`, data),
-  onError: (error, key) => console.error(`${key}:`, error)
+const store = useApiStore.getState()
+store.addMiddleware((next) => async (key, apiCall, options) => {
+  console.log(`[API] ${key} started`)
+  await next(key, apiCall, options)
+  console.log(`[API] ${key} finished`)
 })
 ```
 

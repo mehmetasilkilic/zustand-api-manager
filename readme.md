@@ -16,14 +16,18 @@ A type-safe API layer for Zustand. Define your entire API as a typed interface, 
 | **Declarative cache invalidation** | `invalidates: ['listUsers']` at definition | `queryClient.invalidateQueries()` imperative calls scattered across components |
 | **Cross-endpoint optimistic updates** | `optimistic: { listUsers: (vars, data) => ... }` at definition | Manual `queryClient.setQueryData` + rollback boilerplate |
 | **Built-in polling** | `polling: 10_000` declarative option | `refetchInterval` option |
+| **Refetch on focus / reconnect** | `refetchOnWindowFocus: true` per query or global | `refetchOnWindowFocus` global default |
+| **Infinite queries** | `ApiInfiniteQueryEndpoint` + `fetchNextPage` | `useInfiniteQuery` separate hook |
+| **Garbage collection** | `gcTime` per query or global (default 5min) | `gcTime` per query (default 5min) |
 | **Multi-store isolation** | `createApiStore()` — fully isolated per-feature stores | Single `QueryClient`, workarounds for isolation |
 | **Zustand-native** | Built on Zustand — share state with your existing stores | Separate cache layer, doesn't integrate with Zustand |
+| **Zero extra peer deps** | Only `zustand` + `react` | Only `react` |
 | **Bundle size** | ~10KB gzipped | ~40KB gzipped |
 
 ## Quick Start
 
 ```bash
-npm install zustand-api-manager zustand immer
+npm install zustand-api-manager zustand
 ```
 
 ```typescript
@@ -88,6 +92,9 @@ function CreateUserForm() {
   - [Cross-Endpoint Optimistic Updates](#cross-endpoint-optimistic-updates)
   - [Dependent Queries (enabled pattern)](#dependent-queries-enabled-pattern)
   - [Polling](#polling)
+  - [Refetch on Window Focus / Network Reconnect](#refetch-on-window-focus--network-reconnect)
+  - [Garbage Collection](#garbage-collection)
+  - [Infinite Queries](#infinite-queries)
   - [Prefetch](#prefetch)
 - [Multi-Store Isolation](#multi-store-isolation)
 - [Global Loading States](#global-loading-states-useloadingstates)
@@ -309,6 +316,121 @@ function NotificationBell() {
 - Polling stops on unmount or when `enabled` becomes `false`
 - All `ApiCallOptions` (staleTime, retry, etc.) apply to each poll tick
 
+### Refetch on Window Focus / Network Reconnect
+
+Automatically refetch stale data when the user returns to the tab or reconnects to the network:
+
+```typescript
+// Per-query opt-in
+const { data } = useApi("listUsers", {
+  refetchOnWindowFocus: true,  // refetch when tab becomes visible
+  refetchOnReconnect: true,    // refetch when browser comes back online
+});
+
+// Or set globally for all declarative queries
+configureApiStore({
+  defaultRefetchOnWindowFocus: true,
+  defaultRefetchOnReconnect: true,
+});
+```
+
+**How it works:**
+- `refetchOnWindowFocus` listens to `document.visibilitychange` and triggers a refetch when the page becomes visible
+- `refetchOnReconnect` listens to the `window.online` event and triggers a refetch when the browser reconnects
+- Both are opt-in per query or globally via `configureApiStore`
+- SSR-safe: no-op when `window` is not available
+- Cleanup is automatic on unmount
+
+### Garbage Collection
+
+Unmounted query caches are automatically cleaned up after a configurable delay. This prevents memory leaks from accumulated cache entries:
+
+```typescript
+// Per-query gcTime (default: 5 minutes)
+const { data } = useApi("getUser", {
+  params: { id: 1 },
+  gcTime: 60_000, // clean up 1 minute after unmount
+});
+
+// Disable GC for a specific query
+const { data } = useApi("getSettings", {
+  gcTime: Infinity, // never garbage-collect
+});
+
+// Set globally
+configureApiStore({
+  defaultGcTime: 600_000, // 10 minutes for all queries
+});
+```
+
+**How it works:**
+1. When a declarative query unmounts, a GC timer starts
+2. If the query re-mounts before the timer fires, the timer is cancelled
+3. If the timer fires, the cache entry is deleted from the store
+4. Default: 5 minutes (matching React Query)
+5. Set `gcTime: Infinity` or `gcTime: 0` to disable
+
+### Infinite Queries
+
+Cursor-based pagination with `fetchNextPage`, `hasNextPage`, and automatic page tracking:
+
+```typescript
+import {
+  createApiComposer,
+  ApiInfiniteQueryEndpoint,
+  ApiMutationEndpoint,
+} from "zustand-api-manager";
+
+interface MyApi {
+  listPosts: ApiInfiniteQueryEndpoint<{ userId: number }, Post[], string>;
+  createPost: ApiMutationEndpoint<CreatePostPayload, Post>;
+}
+
+const useApi = createApiComposer<MyApi>({
+  infiniteQueries: {
+    listPosts: {
+      queryFn: (params, cursor) =>
+        api.listPosts({ userId: params.userId, cursor }),
+      getNextCursor: (lastPage) => lastPage.nextCursor ?? null,
+    },
+  },
+  mutations: {
+    createPost: {
+      fn: (payload) => api.createPost(payload),
+      invalidates: ["listPosts"], // re-fetches from first page on success
+    },
+  },
+});
+
+function PostFeed({ userId }: { userId: number }) {
+  const { pages, hasNextPage, isFetchingNextPage, fetchNextPage, isLoading } =
+    useApi("listPosts", { params: { userId } });
+
+  if (isLoading) return <Spinner />;
+
+  return (
+    <div>
+      {pages.flat().map((post) => (
+        <PostCard key={post.id} post={post} />
+      ))}
+      {hasNextPage && (
+        <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          {isFetchingNextPage ? "Loading more..." : "Load More"}
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+**Return values:**
+- `pages` — Array of all fetched pages
+- `pageParams` — Array of cursors used for each page
+- `hasNextPage` — `true` if `getNextCursor(lastPage)` returns a non-null value
+- `isFetchingNextPage` — `true` while `fetchNextPage()` is in progress
+- `fetchNextPage(options?)` — Fetch the next page using the cursor from `getNextCursor`
+- `reset()` / `invalidate()` — Standard query controls
+
 ### Prefetch
 
 Preload data before it's needed using the static `prefetch` method:
@@ -398,6 +520,9 @@ configureApiStore({
   defaultRetry: 3,
   defaultStaleTime: 60_000,
   defaultTimeout: 30_000,
+  defaultRefetchOnWindowFocus: true,
+  defaultRefetchOnReconnect: true,
+  defaultGcTime: 300_000, // 5 minutes (default)
   onError: (error, key) => console.error(`${key} failed:`, error),
 });
 ```
@@ -472,6 +597,9 @@ const {
 | **Declarative invalidation** | **Yes** | No | No | Tags (less flexible) |
 | **Cross-endpoint optimistic** | **Yes** | Manual | Manual | Manual |
 | **Multi-store isolation** | **Yes** | Partial | No | No |
+| Infinite Queries | Yes | Yes | No | No |
+| Refetch on Focus / Reconnect | Yes | Yes | Yes | Yes |
+| Garbage Collection | Yes | Yes | No | Yes |
 | Deduplication | Yes | Yes | Yes | Yes |
 | DevTools | Yes | Yes | No | Yes |
 | Learning Curve | Easy | Medium | Easy | Hard |
@@ -510,8 +638,11 @@ Full type safety out of the box:
 - `createApiComposer<TApiStructure>()` infers parameter and response types per endpoint
 - `ApiCallOptions<T>` — typed `onSuccess`, type-checked `optimisticData`
 - `MutationEndpointConfig<TApi, V, R>` — type-safe `invalidates` (only query keys) and `optimistic` updaters
-- `QueryKeys<T>` — extracts query key names from your API structure
+- `QueryKeys<T>` — extracts query key names from your API structure (includes infinite queries)
 - `OptimisticUpdaters<TApi, V>` — typed optimistic updater functions
+- `ApiInfiniteQueryEndpoint<P, R, C>` — typed infinite query endpoints with cursor type
+- `InfiniteData<R, C>` — typed page and cursor arrays
+- `ApiComposerInfiniteQueryResult<R, P, C>` — typed infinite query return values
 - All exported types: `ApiState`, `ApiError`, `FetchStatus`, `ApiQueryResult`, `ApiMutationResult`, etc.
 
 ## Persistence in React Native

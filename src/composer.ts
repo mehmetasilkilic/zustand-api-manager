@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useApiStore } from './store'
+import { getGlobalConfig } from './config'
+import { onWindowFocus, onReconnect } from './focusManager'
 import {
   ApiCallOptions,
   ApiComposerConfig,
@@ -9,10 +11,32 @@ import {
   ApiStore,
   ComposerDeclarativeOptions,
   FetchStatus,
+  InfiniteData,
   MutationEndpointConfig
 } from './types'
 import { compositeKey } from './utils'
 import type { StoreApi, UseBoundStore } from 'zustand'
+
+/** Default GC time: 5 minutes (matches React Query). */
+const DEFAULT_GC_TIME = 300_000
+
+/** Keys excluded when forwarding declarative options to ApiCallOptions. */
+const DECLARATIVE_ONLY_KEYS = new Set([
+  'params', 'enabled', 'signal', 'optimisticData', 'polling',
+  'refetchOnWindowFocus', 'refetchOnReconnect', 'gcTime'
+])
+
+/** Extract ApiCallOptions from a declarative options record. */
+function extractApiOptions(opts: Record<string, unknown> | undefined): ApiCallOptions<unknown> {
+  if (!opts) return {}
+  const apiOptions: Record<string, unknown> = {}
+  for (const k of Object.keys(opts)) {
+    if (!DECLARATIVE_ONLY_KEYS.has(k)) {
+      apiOptions[k] = opts[k]
+    }
+  }
+  return apiOptions as ApiCallOptions<unknown>
+}
 
 /** Internal normalized shape for every mutation endpoint. */
 interface NormalizedMutation {
@@ -111,17 +135,48 @@ export function createApiComposer<TApiStructure>(
     if (norm.fn.length === 0) voidMutationKeys.add(k)
   }
 
+  // Detect void-param infinite queries
+  const voidInfiniteQueryKeys = new Set<string>()
+  if (config?.infiniteQueries) {
+    for (const [k, iq] of Object.entries(config.infiniteQueries)) {
+      if (iq != null && (iq as { queryFn: (...a: unknown[]) => unknown }).queryFn.length <= 1) {
+        voidInfiniteQueryKeys.add(k)
+      }
+    }
+  }
+
   // ── Active query tracking (shared across all hook instances) ──
 
   // key = composite cache key (e.g. "getUser::{"id":1}")
-  // value = { endpoint: "getUser", params: { id: 1 } }
-  const activeQueries = new Map<string, { endpoint: string; params: unknown }>()
+  // value = { endpoint, params, gcTime, refetchFn }
+  const activeQueries = new Map<string, {
+    endpoint: string
+    params: unknown
+    gcTime: number
+    refetchFn?: () => Promise<unknown>
+  }>()
 
   // key = bare endpoint name, value = set of active composite keys
   const activeKeysByEndpoint = new Map<string, Set<string>>()
 
-  function registerActiveQuery(endpoint: string, cacheKey: string, params: unknown) {
-    activeQueries.set(cacheKey, { endpoint, params })
+  // ── Garbage collection timers ──
+  const gcTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function registerActiveQuery(
+    endpoint: string,
+    cacheKey: string,
+    params: unknown,
+    gcTime: number,
+    refetchFn?: () => Promise<unknown>
+  ) {
+    // Cancel any pending GC timer (query re-mounted before GC fired)
+    const existingTimer = gcTimers.get(cacheKey)
+    if (existingTimer != null) {
+      clearTimeout(existingTimer)
+      gcTimers.delete(cacheKey)
+    }
+
+    activeQueries.set(cacheKey, { endpoint, params, gcTime, refetchFn })
     let keys = activeKeysByEndpoint.get(endpoint)
     if (!keys) {
       keys = new Set()
@@ -131,12 +186,33 @@ export function createApiComposer<TApiStructure>(
   }
 
   function unregisterActiveQuery(endpoint: string, cacheKey: string) {
+    const entry = activeQueries.get(cacheKey)
     activeQueries.delete(cacheKey)
     const keys = activeKeysByEndpoint.get(endpoint)
     if (keys) {
       keys.delete(cacheKey)
       if (keys.size === 0) activeKeysByEndpoint.delete(endpoint)
     }
+
+    // Start GC timer if applicable
+    const gcTime = entry?.gcTime ?? DEFAULT_GC_TIME
+    if (gcTime > 0 && gcTime !== Infinity) {
+      const store = config?.store ?? useApiStore
+      const timer = setTimeout(() => {
+        gcTimers.delete(cacheKey)
+        store.getState().resetApiState(cacheKey)
+      }, gcTime)
+      gcTimers.set(cacheKey, timer)
+    }
+  }
+
+  /** Resolve the effective gcTime for a declarative options object. */
+  function resolveGcTime(opts: Record<string, unknown> | undefined): number {
+    const local = opts?.gcTime as number | undefined
+    if (local != null) return local
+    const global = getGlobalConfig().defaultGcTime
+    if (global != null) return global
+    return DEFAULT_GC_TIME
   }
 
   // ── Prefetch type: extracts params from query endpoints ──
@@ -171,7 +247,17 @@ export function createApiComposer<TApiStructure>(
     const queryFnRef = useRef(queryFn)
     queryFnRef.current = queryFn
 
-    // Declarative mode detection: second arg provided AND this is a query endpoint (not mutation)
+    // Check if this is an infinite query
+    const infiniteConfig = config?.infiniteQueries?.[key] as
+      | { queryFn: (params: unknown, cursor: unknown) => Promise<unknown>; getNextCursor: (lastPage: unknown) => unknown; initialCursor?: unknown }
+      | undefined
+
+    const infiniteConfigRef = useRef(infiniteConfig)
+    infiniteConfigRef.current = infiniteConfig
+
+    const isInfiniteQuery = infiniteConfig != null
+
+    // Declarative mode detection: second arg provided AND this is a query/infinite endpoint (not mutation)
     const isDeclarativeMode = declarativeOptions != null && !mutationFn
     const declParams = isDeclarativeMode
       ? (declarativeOptions as { params?: unknown }).params
@@ -224,6 +310,9 @@ export function createApiComposer<TApiStructure>(
       isError: apiState?.status === FetchStatus.ERROR,
       error: apiState?.error ?? null
     }
+
+    // Track isFetchingNextPage for infinite queries
+    const [isFetchingNextPage, setIsFetchingNextPage] = useState(false)
 
     // If this is a mutation endpoint
     if (normalizedMutation) {
@@ -295,11 +384,16 @@ export function createApiComposer<TApiStructure>(
                     // Refetch each active composite key
                     for (const ck of composites) {
                       const active = activeQueries.get(ck)
-                      const boundFn = config?.queries?.[endpoint as keyof TApiStructure] as
-                        | ((params: unknown) => Promise<unknown>)
-                        | undefined
-                      if (active && boundFn) {
-                        store.handleApi(ck, () => boundFn(active.params))
+                      if (active?.refetchFn) {
+                        // Use stored refetchFn (handles both regular and infinite queries)
+                        active.refetchFn()
+                      } else {
+                        const boundFn = config?.queries?.[endpoint as keyof TApiStructure] as
+                          | ((params: unknown) => Promise<unknown>)
+                          | undefined
+                        if (active && boundFn) {
+                          store.handleApi(ck, () => boundFn(active.params))
+                        }
                       }
                     }
                   }
@@ -343,7 +437,117 @@ export function createApiComposer<TApiStructure>(
       } as ApiComposerReturn<TApiStructure, K>
     }
 
-    // This is a query endpoint — requires a bound query function
+    // ── Infinite query endpoint ──
+    if (isInfiniteQuery) {
+      const infiniteData = (apiState?.data ?? null) as InfiniteData<unknown, unknown> | null
+
+      const reset = useCallback(
+        () => useStore.getState().resetApiState(subscriptionKey),
+        [subscriptionKey, useStore]
+      )
+
+      const invalidate = useCallback(
+        () => useStore.getState().invalidateApi(subscriptionKey),
+        [subscriptionKey, useStore]
+      )
+
+      const fetchNextPage = useCallback(
+        (options?: ApiCallOptions<unknown>) => {
+          const cfg = infiniteConfigRef.current!
+          const store = useStore.getState()
+          const currentData = store.apiStates[subscriptionKey]?.data as InfiniteData<unknown, unknown> | null
+          const lastPage = currentData?.pages[currentData.pages.length - 1]
+          const nextCursor = lastPage ? cfg.getNextCursor(lastPage) : cfg.initialCursor
+
+          setIsFetchingNextPage(true)
+          return store.handleApi(subscriptionKey, async () => {
+            const page = await cfg.queryFn(declParams, nextCursor)
+            const prevData = useStore.getState().apiStates[subscriptionKey]?.data as InfiniteData<unknown, unknown> | null
+            return {
+              pages: [...(prevData?.pages ?? []), page],
+              pageParams: [...(prevData?.pageParams ?? []), nextCursor]
+            }
+          }, {
+            ...options,
+            onSuccess: (data: unknown) => {
+              setIsFetchingNextPage(false)
+              options?.onSuccess?.(data)
+            },
+            onError: (error) => {
+              setIsFetchingNextPage(false)
+              options?.onError?.(error)
+            }
+          }) as Promise<InfiniteData<unknown, unknown> | undefined>
+        },
+        [subscriptionKey, useStore, declParams]
+      )
+
+      // Compute hasNextPage
+      const lastPage = infiniteData?.pages[infiniteData.pages.length - 1]
+      const hasNextPage = lastPage != null
+        ? infiniteConfigRef.current!.getNextCursor(lastPage) != null
+        : false
+
+      // Declarative auto-fetch effect for infinite query endpoints
+      useEffect(() => {
+        if (!isDeclarativeMode || !enabled || !infiniteConfigRef.current) return
+
+        const params = declParams
+        const cacheKey = compositeKey(key as string, params)
+        const cfg = infiniteConfigRef.current!
+        const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+        const gcTime = resolveGcTime(opts)
+
+        // Create the initial fetch function (fetches first page)
+        const initialFetch = () =>
+          useStore.getState().handleApi(cacheKey, async () => {
+            const page = await cfg.queryFn(params, cfg.initialCursor)
+            return { pages: [page], pageParams: [cfg.initialCursor] } as InfiniteData<unknown, unknown>
+          })
+
+        registerActiveQuery(key as string, cacheKey, params, gcTime, initialFetch)
+
+        // Trigger initial fetch
+        initialFetch()
+
+        // Focus/reconnect subscriptions
+        const cleanups: (() => void)[] = []
+        const globalCfg = getGlobalConfig()
+        const refetchOnFocus = (opts?.refetchOnWindowFocus as boolean | undefined) ?? globalCfg.defaultRefetchOnWindowFocus
+        const refetchOnReconnectOpt = (opts?.refetchOnReconnect as boolean | undefined) ?? globalCfg.defaultRefetchOnReconnect
+
+        if (refetchOnFocus) {
+          cleanups.push(onWindowFocus(() => initialFetch()))
+        }
+        if (refetchOnReconnectOpt) {
+          cleanups.push(onReconnect(() => initialFetch()))
+        }
+
+        return () => {
+          unregisterActiveQuery(key as string, cacheKey)
+          cleanups.forEach(fn => fn())
+        }
+      }, [key, serializedParams, enabled, isDeclarativeMode, useStore])
+
+      return {
+        pages: infiniteData?.pages ?? [],
+        pageParams: infiniteData?.pageParams ?? [],
+        status: commonState.status,
+        isFetching: commonState.isFetching,
+        isLoading: commonState.isLoading,
+        isFetchingNextPage,
+        hasNextPage,
+        isSuccess: commonState.isSuccess,
+        isError: commonState.isError,
+        error: commonState.error,
+        fetchedAt: apiState?.fetchedAt ?? null,
+        fetchNextPage,
+        reset,
+        invalidate
+      } as ApiComposerReturn<TApiStructure, K>
+    }
+
+    // ── Regular query endpoint ──
     const query = useCallback(
       (...args: unknown[]) => {
         let params: unknown
@@ -385,24 +589,44 @@ export function createApiComposer<TApiStructure>(
 
       const params = declParams
       const cacheKey = compositeKey(key as string, params)
+      const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+      const gcTime = resolveGcTime(opts)
+      const apiOptions = extractApiOptions(opts)
+
+      // Create refetch function for invalidation
+      const refetch = () =>
+        useStore.getState().handleApi(cacheKey, () => queryFnRef.current!(params), apiOptions)
 
       // Register in active queries for invalidation refetch
-      registerActiveQuery(key as string, cacheKey, params)
+      registerActiveQuery(key as string, cacheKey, params, gcTime, refetch)
 
-      const opts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-      const apiOptions: ApiCallOptions<unknown> = {}
-      if (opts) {
-        // Forward ApiCallOptions keys, excluding declarative-only keys
-        for (const k of Object.keys(opts)) {
-          if (k !== 'params' && k !== 'enabled' && k !== 'signal' && k !== 'optimisticData' && k !== 'polling') {
-            ;(apiOptions as Record<string, unknown>)[k] = opts[k]
-          }
-        }
+      // Trigger initial fetch
+      refetch()
+
+      // Focus/reconnect subscriptions
+      const cleanups: (() => void)[] = []
+      const globalCfg = getGlobalConfig()
+      const refetchOnFocus = (opts?.refetchOnWindowFocus as boolean | undefined) ?? globalCfg.defaultRefetchOnWindowFocus
+      const refetchOnReconnectOpt = (opts?.refetchOnReconnect as boolean | undefined) ?? globalCfg.defaultRefetchOnReconnect
+
+      if (refetchOnFocus) {
+        cleanups.push(onWindowFocus(() => {
+          const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+          const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
+          const currentCacheKey = compositeKey(key as string, currentParams)
+          const currentApiOptions = extractApiOptions(currentOpts)
+          useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), currentApiOptions)
+        }))
       }
-
-      useStore
-        .getState()
-        .handleApi(cacheKey, () => queryFnRef.current!(params), apiOptions)
+      if (refetchOnReconnectOpt) {
+        cleanups.push(onReconnect(() => {
+          const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
+          const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
+          const currentCacheKey = compositeKey(key as string, currentParams)
+          const currentApiOptions = extractApiOptions(currentOpts)
+          useStore.getState().handleApi(currentCacheKey, () => queryFnRef.current!(currentParams), currentApiOptions)
+        }))
+      }
 
       // Polling support
       const pollingInterval = (declarativeOptionsRef.current as { polling?: number } | undefined)?.polling
@@ -413,14 +637,7 @@ export function createApiComposer<TApiStructure>(
           if (currentState?.status === FetchStatus.LOADING) return // skip if still loading
 
           const currentOpts = declarativeOptionsRef.current as Record<string, unknown> | undefined
-          const pollApiOptions: ApiCallOptions<unknown> = {}
-          if (currentOpts) {
-            for (const k of Object.keys(currentOpts)) {
-              if (k !== 'params' && k !== 'enabled' && k !== 'signal' && k !== 'optimisticData' && k !== 'polling') {
-                ;(pollApiOptions as Record<string, unknown>)[k] = currentOpts[k]
-              }
-            }
-          }
+          const pollApiOptions = extractApiOptions(currentOpts)
 
           const currentParams = (currentOpts as { params?: unknown } | undefined)?.params
           const currentCacheKey = compositeKey(key as string, currentParams)
@@ -431,12 +648,14 @@ export function createApiComposer<TApiStructure>(
         return () => {
           unregisterActiveQuery(key as string, cacheKey)
           clearInterval(intervalId)
+          cleanups.forEach(fn => fn())
         }
       }
 
       // Cleanup: deregister from active queries
       return () => {
         unregisterActiveQuery(key as string, cacheKey)
+        cleanups.forEach(fn => fn())
       }
     }, [key, serializedParams, enabled, isDeclarativeMode, useStore])
 

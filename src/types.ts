@@ -224,6 +224,40 @@ export interface ApiMutationEndpoint<V, R> {
 }
 
 /**
+ * Defines a cursor-based infinite query endpoint for use with {@link createApiComposer}.
+ * Infinite query endpoints fetch paginated data and support `fetchNextPage`.
+ *
+ * @typeParam P - The type of the request parameters.
+ * @typeParam R - The type of a single page response.
+ * @typeParam C - The cursor type used for pagination.
+ *
+ * @example
+ * ```ts
+ * interface MyApi {
+ *   listPosts: ApiInfiniteQueryEndpoint<{ userId: number }, Post[], string>
+ * }
+ * ```
+ */
+export interface ApiInfiniteQueryEndpoint<P, R, C = unknown> {
+  _type: 'infiniteQuery'
+  params: P
+  response: R
+  cursor: C
+}
+
+/**
+ * The data shape stored for infinite queries: an array of pages
+ * and the corresponding cursor used to fetch each page.
+ *
+ * @typeParam R - The type of a single page response.
+ * @typeParam C - The cursor type.
+ */
+export interface InfiniteData<R, C = unknown> {
+  pages: R[]
+  pageParams: (C | undefined)[]
+}
+
+/**
  * The function signature for a middleware handler in the API middleware chain.
  * Each handler processes the API call and can modify behavior before/after passing to the next handler.
  *
@@ -256,8 +290,8 @@ export type ApiMiddleware = (next: ApiMiddlewareHandler) => ApiMiddlewareHandler
  * The shape of the Zustand store that manages all API states.
  * This is the underlying store used by all hooks and the composer.
  *
- * The store uses `immer` middleware for immutable state updates and `persist` middleware
- * for optional `localStorage` persistence of selected keys.
+ * The store uses `persist` middleware for optional `localStorage` persistence
+ * of selected keys.
  */
 export interface ApiStore {
   /** A map of all tracked API states, keyed by their unique string identifier. */
@@ -516,7 +550,11 @@ export interface ApiMutationResult<T, V = void> {
  * @typeParam T - The API structure interface.
  */
 export type QueryKeys<T> = {
-  [K in keyof T]: T[K] extends ApiQueryEndpoint<any, any> ? K : never
+  [K in keyof T]: T[K] extends ApiQueryEndpoint<any, any>
+    ? K
+    : T[K] extends ApiInfiniteQueryEndpoint<any, any, any>
+      ? K
+      : never
 }[keyof T]
 
 /**
@@ -602,6 +640,15 @@ export interface ApiComposerConfig<TApiStructure> {
           | MutationEndpointConfig<TApiStructure, V, R>
       : never
   }
+  infiniteQueries?: {
+    [K in keyof TApiStructure]?: TApiStructure[K] extends ApiInfiniteQueryEndpoint<infer P, infer R, infer C>
+      ? {
+          queryFn: (params: P, cursor: C | undefined) => Promise<R>
+          getNextCursor: (lastPage: R) => C | null | undefined
+          initialCursor?: C
+        }
+      : never
+  }
 }
 
 /**
@@ -659,6 +706,30 @@ export interface ApiComposerMutationResult<R, V = void> {
 }
 
 /**
+ * Result type for infinite query endpoints in the composer.
+ *
+ * @typeParam R - The per-page response data type.
+ * @typeParam P - The request parameters type.
+ * @typeParam C - The cursor type.
+ */
+export interface ApiComposerInfiniteQueryResult<R, P = void, C = unknown> {
+  pages: R[]
+  pageParams: (C | undefined)[]
+  status: FetchStatus
+  isFetching: boolean
+  isLoading: boolean
+  isFetchingNextPage: boolean
+  hasNextPage: boolean
+  isSuccess: boolean
+  isError: boolean
+  error: ApiError | null
+  fetchedAt: number | null
+  fetchNextPage: (options?: ApiCallOptions<InfiniteData<R, C>>) => Promise<InfiniteData<R, C> | undefined>
+  reset: () => void
+  invalidate: () => void
+}
+
+/**
  * Conditional return type for {@link createApiComposer}.
  * Resolves to {@link ApiComposerQueryResult} for query endpoints
  * or {@link ApiComposerMutationResult} for mutation endpoints.
@@ -669,9 +740,11 @@ export interface ApiComposerMutationResult<R, V = void> {
 export type ApiComposerReturn<TApiStructure, K extends keyof TApiStructure> =
   TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
     ? ApiComposerQueryResult<R, P>
-    : TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
-      ? ApiComposerMutationResult<R, V>
-      : never
+    : TApiStructure[K] extends ApiInfiniteQueryEndpoint<infer P, infer R, infer C>
+      ? ApiComposerInfiniteQueryResult<R, P, C>
+      : TApiStructure[K] extends ApiMutationEndpoint<infer V, infer R>
+        ? ApiComposerMutationResult<R, V>
+        : never
 
 /**
  * Options for declarative auto-fetching mode in {@link useApiQuery}.
@@ -694,9 +767,24 @@ export interface UseApiQueryOptions<T = unknown> extends ApiCallOptions<T> {
  * @typeParam TApiStructure - The API structure interface.
  * @typeParam K - The endpoint key.
  */
+/** Shared declarative options for queries and infinite queries. */
+type DeclarativeExtras = {
+  enabled?: boolean
+  polling?: number
+  refetchOnWindowFocus?: boolean
+  refetchOnReconnect?: boolean
+  gcTime?: number
+}
+
 export type ComposerDeclarativeOptions<TApiStructure, K extends keyof TApiStructure> =
   TApiStructure[K] extends ApiQueryEndpoint<infer P, infer R>
-    ? P extends void
-      ? { enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
-      : { params: P; enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
-    : never
+    ? (P extends void
+        ? DeclarativeExtras
+        : { params: P } & DeclarativeExtras
+      ) & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>
+    : TApiStructure[K] extends ApiInfiniteQueryEndpoint<infer P, any, any>
+      ? (P extends void
+          ? DeclarativeExtras
+          : { params: P } & DeclarativeExtras
+        )
+      : never

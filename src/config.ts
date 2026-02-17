@@ -13,6 +13,12 @@ export interface GlobalApiConfig {
   defaultTimeout?: number
   /** Default request deduplication setting */
   defaultDedupe?: boolean
+  /** Default refetch on window focus setting for declarative queries */
+  defaultRefetchOnWindowFocus?: boolean
+  /** Default refetch on network reconnect setting for declarative queries */
+  defaultRefetchOnReconnect?: boolean
+  /** Default garbage collection time in milliseconds for unmounted queries. Defaults to 300000 (5 min). */
+  defaultGcTime?: number
   /** Global error handler called for all API errors */
   onError?: (error: ApiError, key: string) => void
   /** Global success handler called for all successful API calls */

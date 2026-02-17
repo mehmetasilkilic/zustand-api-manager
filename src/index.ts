@@ -4,6 +4,7 @@ export { useLoadingStates } from './hooks'
 export { createApiComposer } from './composer'
 export { configureApiStore, resetGlobalConfig } from './config'
 export type { GlobalApiConfig } from './config'
+export { onWindowFocus, onReconnect } from './focusManager'
 
 import { createApiStore as createStoreInternal } from './store'
 import { useLoadingStates as useLoadingStatesFn } from './hooks'

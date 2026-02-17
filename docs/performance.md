@@ -16,35 +16,33 @@ Best practices for optimal performance with zustand-api-manager.
 
 ### Use Selective Subscriptions
 
-The hooks automatically subscribe only to specific slices:
+The composer hook automatically subscribes only to the specific cache key:
 
 ```typescript
-// ✅ Good - only re-renders when 'user' changes
+// ✅ Good - only re-renders when 'getUser' state changes
 function UserProfile() {
-  const { data } = useApiQuery<User>('user', {
-    queryFn: () => fetchUser(1)
-  })
+  const { data } = useApi('getUser', { params: { id: 1 } })
   return <div>{data?.name}</div>
 }
 
 // ❌ Bad - re-renders on any state change
 function UserProfile() {
   const allState = useApiStore(state => state.apiStates)
-  return <div>{allState['user']?.data?.name}</div>
+  return <div>{allState['getUser']?.data?.name}</div>
 }
 ```
 
 ### Stable Function References
 
-All hooks return stable function references:
+The composer hook returns stable function references:
 
 ```typescript
-// ✅ query, reset, invalidate are stable - safe in dependencies
-const { query } = useApiQuery('user')
+// ✅ query, reset, invalidate, mutate are stable - safe in dependencies
+const { query } = useApi('getUser')
 
 // Declarative mode is preferred for most cases,
 // but imperative is still available:
-const handleRefresh = () => query(() => fetchUser(1))
+const handleRefresh = () => query({ id: 1 })
 ```
 
 ### Avoid Unnecessary API Calls
@@ -53,14 +51,14 @@ Use `staleTime` with declarative mode to prevent redundant fetches:
 
 ```typescript
 // ✅ Good - caches for 5 minutes, auto-fetches only when stale
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1),
+const { data } = useApi('getUser', {
+  params: { id: 1 },
   staleTime: 300_000
 })
 
 // ❌ Bad - fetches every mount with no caching
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1) // no staleTime
+const { data } = useApi('getUser', {
+  params: { id: 1 }  // no staleTime
 })
 ```
 
@@ -74,13 +72,16 @@ Balance freshness with performance:
 
 ```typescript
 // User profile - rarely changes
-useApiQuery('profile', { queryFn: fetchProfile, staleTime: 600_000 }) // 10 minutes
+const { data } = useApi('getProfile', { staleTime: 600_000 })  // 10 minutes
 
-// Notification count - changes frequently
-useApiQuery('notifications', { queryFn: fetchNotifications, staleTime: 10_000 }) // 10 seconds
+// Notification count - changes frequently, refetch on focus
+const { data } = useApi('getNotifications', {
+  staleTime: 10_000,
+  refetchOnWindowFocus: true
+})
 
-// Real-time data - always fresh
-useApiQuery('liveData', { queryFn: fetchLiveData }) // no staleTime
+// Real-time data - use polling
+const { data } = useApi('getLiveData', { polling: 5_000 })
 ```
 
 ### Use revalidateOnStale for Better UX
@@ -88,10 +89,10 @@ useApiQuery('liveData', { queryFn: fetchLiveData }) // no staleTime
 Return stale data immediately, refetch in background:
 
 ```typescript
-const { data } = useApiQuery<User>('user', {
-  queryFn: () => fetchUser(1),
+const { data } = useApi('getUser', {
+  params: { id: 1 },
   staleTime: 60_000,
-  revalidateOnStale: true // Show stale data instantly, update later
+  revalidateOnStale: true  // Show stale data instantly, update later
 })
 ```
 
@@ -101,16 +102,11 @@ Improve perceived performance:
 
 ```typescript
 function UserList() {
-  const { prefetch } = usePrefetch()
-
-  const handleHover = (userId: number) => {
-    prefetch(`user-${userId}`, () => fetchUser(userId), {
-      staleTime: 60_000
-    })
-  }
-
   return users.map(user => (
-    <li onMouseEnter={() => handleHover(user.id)}>
+    <li
+      key={user.id}
+      onMouseEnter={() => useApi.prefetch('getUser', { id: user.id })}
+    >
       {user.name}
     </li>
   ))
@@ -119,24 +115,24 @@ function UserList() {
 
 ### Cache Invalidation
 
-Invalidate strategically:
+Use declarative invalidation at the composer level:
 
 ```typescript
-// ✅ Good - invalidate related data
-const { mutate } = useApiMutation('updateUser', updateUser)
-
-await mutate(data, {
-  onSuccess: () => {
-    // Invalidate affected queries
-    useApiStore.getState().invalidateApis([
-      'user',
-      'user-list',
-      'user-settings'
-    ])
+// ✅ Good - declarative invalidation defined once
+const useApi = createApiComposer<MyApi>({
+  queries: {
+    listUsers: () => api.listUsers(),
+    getUser: (params) => api.getUser(params)
+  },
+  mutations: {
+    updateUser: {
+      fn: (payload) => api.updateUser(payload),
+      invalidates: ['listUsers', 'getUser']  // automatic on success
+    }
   }
 })
 
-// ❌ Bad - invalidate everything
+// ❌ Bad - imperative invalidation scattered across components
 useApiStore.getState().invalidateAll()
 ```
 
@@ -149,18 +145,18 @@ useApiStore.getState().invalidateAll()
 Prevent duplicate concurrent requests:
 
 ```typescript
-// Multiple components auto-fetch the same data with dedupe
+// Multiple components share the same declarative query + dedupe
 function ComponentA() {
-  const { data } = useApiQuery('user', {
-    queryFn: () => fetchUser(1),
+  const { data } = useApi('getUser', {
+    params: { id: 1 },
     dedupe: true
   })
 }
 
 function ComponentB() {
-  const { data } = useApiQuery('user', {
-    queryFn: () => fetchUser(1),
-    dedupe: true // Shares request with A
+  const { data } = useApi('getUser', {
+    params: { id: 1 },
+    dedupe: true  // Shares request with A
   })
 }
 ```
@@ -207,15 +203,12 @@ function Search() {
 Don't wait forever for slow requests:
 
 ```typescript
-const { data } = useApiQuery<Data>('data', {
-  queryFn: () => fetchData(),
-  timeout: 10_000, // 10 second timeout
-  onError: (error) => {
-    if (error.code === 'TIMEOUT') {
-      // Handle timeout
-    }
-  }
+const { data } = useApi('getData', {
+  timeout: 10_000  // 10 second timeout
 })
+
+// Or set globally
+configureApiStore({ defaultTimeout: 10_000 })
 ```
 
 ---
@@ -246,14 +239,13 @@ const PostsModule = lazy(() => import('./features/posts'))
 
 ### Peer Dependencies
 
-Zustand and Immer are peer dependencies, so you control versions:
+Zustand is the only peer dependency:
 
 ```json
 {
   "dependencies": {
     "zustand": "^5.0.0",
-    "immer": "^11.0.0",
-    "zustand-api-manager": "^2.0.0"
+    "zustand-api-manager": "^3.1.0"
   }
 }
 ```
@@ -262,27 +254,32 @@ Zustand and Immer are peer dependencies, so you control versions:
 
 ## Memory Management
 
-### Clean Up on Unmount
+### Garbage Collection (Automatic)
 
-Reset state when component unmounts:
+The composer automatically garbage-collects unmounted query caches after a configurable delay. This means you typically don't need manual cleanup:
 
 ```typescript
-function TemporaryView() {
-  const { data, reset } = useApiQuery<Data>('temp-data', {
-    queryFn: () => fetchTempData()
-  })
+// GC runs automatically — cache cleaned up 5 minutes after unmount (default)
+const { data } = useApi('getUser', { params: { id: 1 } })
 
-  useEffect(() => {
-    return () => reset()
-  }, [reset])
+// Customize per query
+const { data } = useApi('getUser', {
+  params: { id: 1 },
+  gcTime: 60_000      // clean up after 1 minute
+})
 
-  return <div>{data?.value}</div>
-}
+// Keep cache forever (disable GC)
+const { data } = useApi('getSettings', { gcTime: Infinity })
+
+// Set global default
+configureApiStore({ defaultGcTime: 600_000 })  // 10 minutes
 ```
 
-### Remove Unused Keys
+If a query re-mounts before GC fires, the timer is cancelled and existing cache is reused. This is the recommended approach over manual `reset()` calls.
 
-Don't accumulate stale keys:
+### Manual Cleanup
+
+For imperative use cases outside the composer, you can still reset manually:
 
 ```typescript
 // Clean up after feature is removed
@@ -299,8 +296,8 @@ Only persist what's necessary:
 
 ```typescript
 // ✅ Good - selective persistence
-useApiQuery('user', { queryFn: fetchUser, persist: true }) // Important
-useApiQuery('temp', { queryFn: fetchTemp }) // Temporary, don't persist
+const { data } = useApi('getUser', { persist: true })  // Important
+const { data } = useApi('getTemp', {})  // Temporary, don't persist
 ```
 
 ---
@@ -364,11 +361,12 @@ Typical performance characteristics:
 - [ ] Use `staleTime` for cacheable data
 - [ ] Enable `dedupe` for shared requests
 - [ ] Implement `revalidateOnStale` for better UX
-- [ ] Prefetch on hover/navigation
+- [ ] Use `refetchOnWindowFocus` for data that changes while user is away
+- [ ] Configure `gcTime` to match your data lifecycle
+- [ ] Prefetch on hover/navigation with `useApi.prefetch()`
 - [ ] Set appropriate timeouts
-- [ ] Batch invalidations with `invalidateApis`
+- [ ] Use declarative `invalidates` at composer level (not imperative calls)
 - [ ] Cancel unnecessary requests
-- [ ] Clean up on unmount
 - [ ] Limit persistent storage
 - [ ] Monitor with DevTools
 - [ ] Profile with React DevTools
@@ -377,35 +375,28 @@ Typical performance characteristics:
 
 ## Real-World Example
 
-Optimized component using declarative mode:
+Optimized component using the composer:
 
 ```typescript
 function OptimizedUserList() {
-  const { data, isLoading } = useApiQuery<User[]>('users', {
-    queryFn: () => fetchUsers(),
-    staleTime: 300_000, // Cache 5 minutes
-    revalidateOnStale: true, // Return stale, refetch background
-    dedupe: true, // Share with other components
-    persist: true, // Survive reload
-    timeout: 10_000 // Don't wait forever
+  const { data, isLoading } = useApi('listUsers', {
+    staleTime: 300_000,            // Cache 5 minutes
+    revalidateOnStale: true,       // Return stale, refetch background
+    dedupe: true,                  // Share with other components
+    refetchOnWindowFocus: true,    // Refresh when user returns to tab
+    gcTime: 600_000,               // Keep cache 10 min after unmount
+    persist: true,                 // Survive reload
+    timeout: 10_000                // Don't wait forever
   })
-  const { prefetch } = usePrefetch()
 
-  const handleHover = (userId: number) => {
-    // Prefetch details on hover
-    prefetch(`user-${userId}`, () => fetchUser(userId), {
-      staleTime: 300_000
-    })
-  }
-
-  if (isLoading && !data) return <Loading />
+  if (isLoading) return <Loading />
 
   return (
     <ul>
       {data?.map(user => (
         <li
           key={user.id}
-          onMouseEnter={() => handleHover(user.id)}
+          onMouseEnter={() => useApi.prefetch('getUser', { id: user.id })}
         >
           {user.name}
         </li>

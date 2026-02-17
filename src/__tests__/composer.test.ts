@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useApiStore } from '../store'
 import { createApiComposer } from '../composer'
-import { ApiQueryEndpoint, ApiMutationEndpoint } from '../types'
+import { configureApiStore, resetGlobalConfig } from '../config'
+import { ApiQueryEndpoint, ApiMutationEndpoint, ApiInfiniteQueryEndpoint } from '../types'
 
 beforeEach(() => {
   useApiStore.setState({
@@ -11,6 +12,10 @@ beforeEach(() => {
     middleware: [],
     errorHandlers: []
   })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 // ====================
@@ -1397,5 +1402,671 @@ describe('createApiComposer — isFetching vs isLoading', () => {
       expect(result.current.isFetching).toBe(false)
     })
     expect(result.current.isLoading).toBe(false)
+  })
+})
+
+// ====================
+// Window Focus Refetch
+// ====================
+
+describe('createApiComposer — window focus refetch', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+    resetGlobalConfig()
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true
+    })
+  })
+
+  it('refetches on window focus when refetchOnWindowFocus is true', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', { refetchOnWindowFocus: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    // Simulate tab becoming visible
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      writable: true,
+      configurable: true
+    })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+
+    unmount()
+  })
+
+  it('does NOT refetch on focus when refetchOnWindowFocus is false (default)', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', {})
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    // Wait a tick to make sure no extra call happens
+    await new Promise(r => setTimeout(r, 50))
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+  })
+
+  it('respects global defaultRefetchOnWindowFocus', async () => {
+    configureApiStore({ defaultRefetchOnWindowFocus: true })
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', {})
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+
+    unmount()
+    resetGlobalConfig()
+  })
+
+  it('cleans up focus listener on unmount', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', { refetchOnWindowFocus: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    document.dispatchEvent(new Event('visibilitychange'))
+    await new Promise(r => setTimeout(r, 50))
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ====================
+// Network Reconnect Refetch
+// ====================
+
+describe('createApiComposer — network reconnect refetch', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+    resetGlobalConfig()
+  })
+
+  it('refetches on reconnect when refetchOnReconnect is true', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', { refetchOnReconnect: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    window.dispatchEvent(new Event('online'))
+
+    await waitFor(() => {
+      expect(listUsersCall).toHaveBeenCalledTimes(2)
+    })
+
+    unmount()
+  })
+
+  it('does NOT refetch on reconnect by default', async () => {
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useModernApi('listUsers', {})
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    window.dispatchEvent(new Event('online'))
+
+    await new Promise(r => setTimeout(r, 50))
+    expect(listUsersCall).toHaveBeenCalledTimes(1)
+
+    unmount()
+  })
+})
+
+// ====================
+// Garbage Collection
+// ====================
+
+describe('createApiComposer — garbage collection', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+    resetGlobalConfig()
+  })
+
+  it('deletes cache entry after gcTime elapses on unmount', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 5000 })
+    )
+
+    // Flush microtasks so handleApi resolves
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // Verify cache exists
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+    expect(useApiStore.getState().apiStates['listUsers'].status).toBe('SUCCESS')
+
+    // Unmount — starts GC timer
+    unmount()
+
+    // Cache should still exist before gcTime
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+
+    // Cache should be deleted after gcTime
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeUndefined()
+  })
+
+  it('cancels GC timer if query re-mounts before timer fires', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    // Mount
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 5000 })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']?.status).toBe('SUCCESS')
+
+    // Unmount — starts GC timer
+    unmount()
+
+    // Advance part-way
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+
+    // Re-mount — should cancel GC timer
+    const { unmount: unmount2 } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 5000 })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // Advance past original GC deadline — cache should still exist
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+
+    unmount2()
+  })
+
+  it('gcTime: Infinity disables GC', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: Infinity })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']?.status).toBe('SUCCESS')
+
+    unmount()
+
+    // Advance a long time — cache should persist
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000_000)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+  })
+
+  it('gcTime: 0 disables GC', async () => {
+    vi.useFakeTimers()
+
+    const listUsersCall = vi.fn(() =>
+      Promise.resolve([{ id: 1, name: 'John', email: 'john@example.com' }])
+    )
+
+    const useModernApi = createApiComposer<ModernApi>({
+      queries: { listUsers: listUsersCall }
+    })
+
+    const { unmount } = renderHook(() =>
+      useModernApi('listUsers', { gcTime: 0 })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(useApiStore.getState().apiStates['listUsers']?.status).toBe('SUCCESS')
+
+    unmount()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000_000)
+    })
+    expect(useApiStore.getState().apiStates['listUsers']).toBeDefined()
+  })
+})
+
+// ====================
+// Infinite Queries
+// ====================
+
+interface Post {
+  id: number
+  title: string
+}
+
+interface PostPage {
+  items: Post[]
+  nextCursor: string | null
+}
+
+interface InfiniteApi {
+  listPosts: ApiInfiniteQueryEndpoint<void, PostPage, string>
+  userPosts: ApiInfiniteQueryEndpoint<{ userId: number }, PostPage, string>
+  createPost: ApiMutationEndpoint<{ title: string }, Post>
+}
+
+describe('createApiComposer — infinite queries', () => {
+  beforeEach(() => {
+    useApiStore.getState().resetAll()
+    vi.clearAllMocks()
+    resetGlobalConfig()
+  })
+
+  it('initial fetch populates pages array', async () => {
+    const queryFn = vi.fn((_params: void, _cursor: string | undefined) =>
+      Promise.resolve({
+        items: [{ id: 1, title: 'Post 1' }, { id: 2, title: 'Post 2' }],
+        nextCursor: 'cursor2'
+      })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.pages).toHaveLength(1)
+    expect(result.current.pages[0].items).toHaveLength(2)
+    expect(result.current.pageParams).toEqual([undefined])
+    expect(result.current.hasNextPage).toBe(true)
+  })
+
+  it('fetchNextPage appends a new page', async () => {
+    let callCount = 0
+    const queryFn = vi.fn((_params: void, cursor: string | undefined) => {
+      callCount++
+      if (!cursor) {
+        return Promise.resolve({
+          items: [{ id: 1, title: 'Post 1' }],
+          nextCursor: 'cursor2'
+        })
+      }
+      return Promise.resolve({
+        items: [{ id: 2, title: 'Post 2' }],
+        nextCursor: 'cursor3'
+      })
+    })
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.pages).toHaveLength(1)
+
+    // Fetch next page
+    await act(async () => {
+      await result.current.fetchNextPage()
+    })
+
+    await waitFor(() => {
+      expect(result.current.pages).toHaveLength(2)
+    })
+
+    expect(result.current.pages[1].items[0].title).toBe('Post 2')
+    expect(result.current.pageParams).toEqual([undefined, 'cursor2'])
+    expect(result.current.hasNextPage).toBe(true)
+  })
+
+  it('hasNextPage is false when getNextCursor returns null', async () => {
+    const queryFn = vi.fn(() =>
+      Promise.resolve({
+        items: [{ id: 1, title: 'Post 1' }],
+        nextCursor: null
+      })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.hasNextPage).toBe(false)
+  })
+
+  it('isFetchingNextPage is true during fetchNextPage', async () => {
+    let resolveFetch: ((value: PostPage) => void) | undefined
+    const queryFn = vi.fn((_params: void, cursor: string | undefined) => {
+      if (!cursor) {
+        return Promise.resolve({
+          items: [{ id: 1, title: 'Post 1' }],
+          nextCursor: 'cursor2'
+        })
+      }
+      return new Promise<PostPage>(resolve => { resolveFetch = resolve })
+    })
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.isFetchingNextPage).toBe(false)
+
+    // Start fetchNextPage (will hang)
+    act(() => {
+      result.current.fetchNextPage()
+    })
+
+    await waitFor(() => {
+      expect(result.current.isFetchingNextPage).toBe(true)
+    })
+
+    // Resolve
+    await act(async () => {
+      resolveFetch!({ items: [{ id: 2, title: 'Post 2' }], nextCursor: null })
+    })
+
+    await waitFor(() => {
+      expect(result.current.isFetchingNextPage).toBe(false)
+    })
+  })
+
+  it('invalidation refetches from first page', async () => {
+    let callCount = 0
+    const queryFn = vi.fn((_params: void, cursor: string | undefined) => {
+      callCount++
+      if (!cursor) {
+        return Promise.resolve({
+          items: [{ id: callCount, title: `Post ${callCount}` }],
+          nextCursor: 'cursor2'
+        })
+      }
+      return Promise.resolve({
+        items: [{ id: 100, title: 'Page 2' }],
+        nextCursor: null
+      })
+    })
+
+    const createPostFn = vi.fn((_vars: { title: string }) =>
+      Promise.resolve({ id: 99, title: 'New Post' })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      },
+      mutations: {
+        createPost: {
+          fn: createPostFn,
+          invalidates: ['listPosts']
+        }
+      }
+    })
+
+    // Mount infinite query
+    const { result: listResult } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(listResult.current.isSuccess).toBe(true)
+    })
+
+    // Fetch next page
+    await act(async () => {
+      await listResult.current.fetchNextPage()
+    })
+
+    await waitFor(() => {
+      expect(listResult.current.pages).toHaveLength(2)
+    })
+
+    const fetchCountBefore = queryFn.mock.calls.length
+
+    // Mount mutation and trigger it
+    const { result: mutResult } = renderHook(() => useApi('createPost'))
+
+    await act(async () => {
+      await mutResult.current.mutate({ title: 'Trigger invalidation' })
+    })
+
+    await waitFor(() => {
+      expect(mutResult.current.isSuccess).toBe(true)
+    })
+
+    // The infinite query should have been re-fetched (from first page)
+    await waitFor(() => {
+      expect(queryFn.mock.calls.length).toBeGreaterThan(fetchCountBefore)
+    })
+  })
+
+  it('reset clears all pages', async () => {
+    const queryFn = vi.fn(() =>
+      Promise.resolve({
+        items: [{ id: 1, title: 'Post 1' }],
+        nextCursor: null
+      })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        listPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() => useApi('listPosts', {}))
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.pages).toHaveLength(1)
+
+    act(() => {
+      result.current.reset()
+    })
+
+    expect(result.current.pages).toHaveLength(0)
+    expect(result.current.pageParams).toHaveLength(0)
+  })
+
+  it('supports parameterized infinite queries', async () => {
+    const queryFn = vi.fn((params: { userId: number }, _cursor: string | undefined) =>
+      Promise.resolve({
+        items: [{ id: 1, title: `Post by user ${params.userId}` }],
+        nextCursor: null
+      })
+    )
+
+    const useApi = createApiComposer<InfiniteApi>({
+      infiniteQueries: {
+        userPosts: {
+          queryFn,
+          getNextCursor: (page) => page.nextCursor
+        }
+      }
+    })
+
+    const { result } = renderHook(() =>
+      useApi('userPosts', { params: { userId: 42 } })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(result.current.pages[0].items[0].title).toBe('Post by user 42')
+    expect(queryFn).toHaveBeenCalledWith({ userId: 42 }, undefined)
   })
 })

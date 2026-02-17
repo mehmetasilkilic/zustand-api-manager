@@ -1,6 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { createJSONStorage, devtools, persist, type StateStorage } from 'zustand/middleware'
-import { immer } from 'zustand/middleware/immer'
 import { initialApiState, STORAGE_KEY } from './constants'
 import { mergeWithGlobalConfig, getGlobalConfig } from './config'
 import {
@@ -171,52 +170,62 @@ export function createApiStore(config: ApiStoreConfig = {}) {
   /** Per-store abort controllers for cancellation. */
   const activeControllers = new Map<string, AbortController>()
 
-  const storeCreator = immer<ApiStore>((set, get) => ({
+  const storeCreator: Parameters<typeof persist<ApiStore>>[0] = (set, get) => ({
     apiStates: {},
     persistentKeys: {},
     middleware: [],
     errorHandlers: [],
 
     setApiState: <T>(key: string, state: Partial<ApiState<T>>, shouldPersist?: boolean) =>
-      set(draft => {
-        if (!draft.apiStates[key]) {
-          draft.apiStates[key] = { ...initialApiState } as ApiState<T>
-        }
+      set(prev => {
+        const existing = prev.apiStates[key] as ApiState<T> | undefined
+        const merged = { ...(existing ?? initialApiState), ...state } as ApiState<T>
 
-        const prevState = draft.apiStates[key] as ApiState<T>
-        Object.assign(prevState, state)
+        const nextPersistent =
+          shouldPersist === true
+            ? { ...prev.persistentKeys, [key]: true }
+            : shouldPersist === false
+              ? (({ [key]: _, ...rest }) => rest)(prev.persistentKeys)
+              : prev.persistentKeys
 
-        if (shouldPersist === true) {
-          draft.persistentKeys[key] = true
-        } else if (shouldPersist === false) {
-          delete draft.persistentKeys[key]
+        return {
+          apiStates: { ...prev.apiStates, [key]: merged },
+          persistentKeys: nextPersistent
         }
-        // undefined = don't change persistence
       }),
 
     resetApiState: (key: string) => {
       delete activeRequests[key]
       pendingRequests.delete(key)
-      set(draft => {
-        delete draft.apiStates[key]
-        delete draft.persistentKeys[key]
+      set(prev => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [key]: _, ...restStates } = prev.apiStates
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [key]: __, ...restPersistent } = prev.persistentKeys
+        return { apiStates: restStates, persistentKeys: restPersistent }
       })
     },
 
     invalidateApi: (key: string) =>
-      set(draft => {
-        if (draft.apiStates[key]) {
-          draft.apiStates[key].fetchedAt = null
+      set(prev => {
+        if (!prev.apiStates[key]) return prev
+        return {
+          apiStates: {
+            ...prev.apiStates,
+            [key]: { ...prev.apiStates[key], fetchedAt: null }
+          }
         }
       }),
 
     invalidateApis: (keys: string[]) =>
-      set(draft => {
+      set(prev => {
+        const next = { ...prev.apiStates }
         for (const key of keys) {
-          if (draft.apiStates[key]) {
-            draft.apiStates[key].fetchedAt = null
+          if (next[key]) {
+            next[key] = { ...next[key], fetchedAt: null }
           }
         }
+        return { apiStates: next }
       }),
 
     resetApiStates: (keys: string[]) => {
@@ -224,11 +233,14 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         delete activeRequests[key]
         pendingRequests.delete(key)
       }
-      set(draft => {
+      set(prev => {
+        const nextStates = { ...prev.apiStates }
+        const nextPersistent = { ...prev.persistentKeys }
         for (const key of keys) {
-          delete draft.apiStates[key]
-          delete draft.persistentKeys[key]
+          delete nextStates[key]
+          delete nextPersistent[key]
         }
+        return { apiStates: nextStates, persistentKeys: nextPersistent }
       })
     },
 
@@ -238,18 +250,15 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         delete activeRequests[key]
         pendingRequests.delete(key)
       }
-      set(draft => {
-        draft.apiStates = {}
-        draft.persistentKeys = {}
-      })
+      set(() => ({ apiStates: {}, persistentKeys: {} }))
     },
 
     invalidateAll: () =>
-      set(draft => {
-        for (const key of Object.keys(draft.apiStates)) {
-          draft.apiStates[key].fetchedAt = null
-        }
-      }),
+      set(prev => ({
+        apiStates: Object.fromEntries(
+          Object.entries(prev.apiStates).map(([k, v]) => [k, { ...v, fetchedAt: null }])
+        )
+      })),
 
     handleApi: <T>(
       key: string,
@@ -467,28 +476,16 @@ export function createApiStore(config: ApiStoreConfig = {}) {
     },
 
     addMiddleware: middleware => {
-      set(draft => {
-        draft.middleware.push(middleware)
-      })
+      set(prev => ({ middleware: [...prev.middleware, middleware] }))
       return () => {
-        set(draft => {
-          // indexOf works correctly here because immer's proxy resolves
-          // the comparison against the original reference.
-          const idx = draft.middleware.indexOf(middleware)
-          if (idx !== -1) draft.middleware.splice(idx, 1)
-        })
+        set(prev => ({ middleware: prev.middleware.filter(m => m !== middleware) }))
       }
     },
 
     addErrorHandler: handler => {
-      set(draft => {
-        draft.errorHandlers.push(handler)
-      })
+      set(prev => ({ errorHandlers: [...prev.errorHandlers, handler] }))
       return () => {
-        set(draft => {
-          const idx = draft.errorHandlers.indexOf(handler)
-          if (idx !== -1) draft.errorHandlers.splice(idx, 1)
-        })
+        set(prev => ({ errorHandlers: prev.errorHandlers.filter(h => h !== handler) }))
       }
     },
 
@@ -505,7 +502,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
         activeControllers.delete(key)
       }
     }
-  }))
+  })
 
   const persistedStore = persist(storeCreator, {
     name: storageKey,
@@ -538,9 +535,9 @@ export function createApiStore(config: ApiStoreConfig = {}) {
 /**
  * The default singleton API store, created with default configuration.
  *
- * Uses `immer` middleware for immutable state updates and `persist` middleware
- * for optional `localStorage` persistence. Only API keys explicitly marked with
- * `persist: true` in their `ApiCallOptions` will survive page reloads.
+ * Uses `persist` middleware for optional `localStorage` persistence.
+ * Only API keys explicitly marked with `persist: true` in their
+ * `ApiCallOptions` will survive page reloads.
  *
  * @example
  * ```ts

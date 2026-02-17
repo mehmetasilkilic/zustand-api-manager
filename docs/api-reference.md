@@ -7,8 +7,12 @@ Complete API documentation for zustand-api-manager.
 - [Composer](#composer)
   - [createApiComposer](#createapicomposer)
   - [Polling](#polling)
+  - [Refetch on Window Focus / Reconnect](#refetch-on-window-focus--reconnect)
+  - [Garbage Collection](#garbage-collection)
+  - [Infinite Queries](#infinite-queries)
   - [Prefetch](#prefetch)
   - [MutationEndpointConfig](#mutationendpointconfig)
+- [Focus Manager](#focus-manager)
 - [Hooks](#hooks)
   - [useLoadingStates](#useloadingstates)
 - [Store Methods](#store-methods)
@@ -129,6 +133,127 @@ const { data } = useApi('listUsers', {
 
 ---
 
+### Refetch on Window Focus / Reconnect
+
+Opt-in per query or globally to refetch when the user returns to the tab or reconnects to the network.
+
+```typescript
+// Per-query
+const { data } = useApi('listUsers', {
+  refetchOnWindowFocus: true,
+  refetchOnReconnect: true
+})
+
+// Global defaults
+configureApiStore({
+  defaultRefetchOnWindowFocus: true,
+  defaultRefetchOnReconnect: true
+})
+```
+
+**Options:**
+- `refetchOnWindowFocus` (boolean): Refetch when `document.visibilityState` becomes `'visible'`. Defaults to `false` (or the global default).
+- `refetchOnReconnect` (boolean): Refetch when the `window.online` event fires. Defaults to `false` (or the global default).
+
+**Behavior:**
+- Only applies to declarative queries (second argument provided)
+- Subscribes to DOM events on mount, unsubscribes on unmount
+- SSR-safe: no-op when `window` is not available
+- The global default is overridden by the per-query option
+
+---
+
+### Garbage Collection
+
+Unmounted declarative query caches are automatically cleaned up after a configurable delay.
+
+```typescript
+// Per-query
+const { data } = useApi('getUser', {
+  params: { id: 1 },
+  gcTime: 60_000  // clean up 1 minute after unmount
+})
+
+// Disable GC for a query
+const { data } = useApi('getSettings', { gcTime: Infinity })
+
+// Global default
+configureApiStore({ defaultGcTime: 600_000 })  // 10 minutes
+```
+
+**Options:**
+- `gcTime` (number): Milliseconds to wait before cleaning up an unmounted query's cache. Defaults to `300_000` (5 minutes, matching React Query).
+
+**Behavior:**
+- When a declarative query unmounts, a GC timer starts
+- If the query re-mounts before the timer fires, the timer is cancelled (no data loss)
+- If the timer fires, `store.resetApiState(cacheKey)` is called
+- Set `gcTime: Infinity` or `gcTime: 0` to disable GC
+- Resolution order: per-query `gcTime` > `configureApiStore({ defaultGcTime })` > `300_000`
+
+---
+
+### Infinite Queries
+
+Cursor-based paginated queries with automatic page tracking.
+
+```typescript
+import {
+  createApiComposer,
+  ApiInfiniteQueryEndpoint
+} from 'zustand-api-manager'
+
+interface MyApi {
+  listPosts: ApiInfiniteQueryEndpoint<{ userId: number }, Post[], string>
+}
+
+const useApi = createApiComposer<MyApi>({
+  infiniteQueries: {
+    listPosts: {
+      queryFn: (params, cursor) => api.listPosts({ userId: params.userId, cursor }),
+      getNextCursor: (lastPage) => lastPage.nextCursor ?? null,
+      initialCursor: undefined  // optional, defaults to undefined
+    }
+  }
+})
+```
+
+**Config fields:**
+- `queryFn(params, cursor)` — Fetch a single page. `cursor` is `undefined` for the first page.
+- `getNextCursor(lastPage)` — Extract the next cursor from the last fetched page. Return `null` or `undefined` to signal no more pages.
+- `initialCursor?` — The cursor for the first page. Defaults to `undefined`.
+
+**Declarative mode:**
+```typescript
+const {
+  pages,              // R[] — all fetched pages
+  pageParams,         // (C | undefined)[] — cursor for each page
+  hasNextPage,        // boolean — getNextCursor(lastPage) != null
+  isFetchingNextPage, // boolean — fetchNextPage() in progress
+  fetchNextPage,      // (options?) => Promise<InfiniteData<R, C> | undefined>
+  isLoading,          // boolean — first load
+  isFetching,         // boolean — any fetch in progress
+  isSuccess,
+  isError,
+  error,
+  fetchedAt,
+  reset,
+  invalidate
+} = useApi('listPosts', { params: { userId: 1 } })
+```
+
+**`fetchNextPage(options?)`**
+
+Fetches the next page using the cursor from `getNextCursor(lastPage)`. Appends the result to `pages` and `pageParams`. Accepts optional `ApiCallOptions`.
+
+**Invalidation:**
+
+When a mutation with `invalidates: ['listPosts']` succeeds, the infinite query refetches from the first page (reset behavior).
+
+**Supported declarative options:** `params`, `enabled`, `refetchOnWindowFocus`, `refetchOnReconnect`, `gcTime`.
+
+---
+
 ### Prefetch
 
 Use `useApi.prefetch()` to preload data before a component mounts. This is a static method on the composer hook — it works outside of React components.
@@ -189,6 +314,48 @@ interface MutationEndpointConfig<TApi, V, R> {
 3. `handleApi()` executes the mutation
 4. On success: `invalidateApis()` clears caches, active declarative queries refetch
 5. On error: optimistic snapshots are restored (rollback)
+
+---
+
+## Focus Manager
+
+Low-level utilities for subscribing to browser focus and network events. These are used internally by the composer, but exported for advanced use cases.
+
+```typescript
+import { onWindowFocus, onReconnect } from 'zustand-api-manager'
+```
+
+### onWindowFocus
+
+Subscribe to window focus (tab visibility) events.
+
+```typescript
+const unsubscribe = onWindowFocus(() => {
+  console.log('Tab became visible')
+})
+
+// Later: stop listening
+unsubscribe()
+```
+
+- Fires when `document.visibilityState` becomes `'visible'`
+- Lazily attaches the DOM listener on first subscriber, removes on last unsubscribe
+- SSR-safe: returns a no-op if `window`/`document` is not available
+
+### onReconnect
+
+Subscribe to network reconnect events.
+
+```typescript
+const unsubscribe = onReconnect(() => {
+  console.log('Back online')
+})
+
+unsubscribe()
+```
+
+- Fires on the `window.online` event
+- Same lazy listener management and SSR safety as `onWindowFocus`
 
 ---
 
@@ -368,6 +535,9 @@ configureApiStore({
   defaultRetry: 3,
   defaultStaleTime: 60_000,
   defaultTimeout: 30_000,
+  defaultRefetchOnWindowFocus: true,
+  defaultRefetchOnReconnect: true,
+  defaultGcTime: 300_000,
   onError: (error, key) => {
     console.error(`${key} failed:`, error)
   }
@@ -380,14 +550,18 @@ configureApiStore({
 
 ### QueryKeys\<T\>
 
-Extracts query endpoint keys from an API structure.
+Extracts query endpoint keys (including infinite queries) from an API structure.
 
 ```typescript
 type QueryKeys<T> = {
-  [K in keyof T]: T[K] extends ApiQueryEndpoint<any, any> ? K : never
+  [K in keyof T]: T[K] extends ApiQueryEndpoint<any, any>
+    ? K
+    : T[K] extends ApiInfiniteQueryEndpoint<any, any, any>
+      ? K
+      : never
 }[keyof T]
 
-// Example: QueryKeys<MyApi> = 'getUser' | 'listUsers'
+// Example: QueryKeys<MyApi> = 'getUser' | 'listUsers' | 'listPosts'
 ```
 
 ### OptimisticUpdaters\<TApi, V\>
@@ -418,9 +592,18 @@ interface MutationEndpointConfig<TApi, V, R> {
 
 Conditional options type for declarative auto-fetching in the composer:
 
-- For `ApiQueryEndpoint<P, R>` where `P extends void`: `{ enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
-- For `ApiQueryEndpoint<P, R>` where P is not void: `{ params: P; enabled?: boolean; polling?: number } & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
+- For `ApiQueryEndpoint<P, R>` where `P extends void`: `DeclarativeExtras & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
+- For `ApiQueryEndpoint<P, R>` where P is not void: `{ params: P } & DeclarativeExtras & Omit<ApiCallOptions<R>, 'signal' | 'optimisticData'>`
+- For `ApiInfiniteQueryEndpoint<P, R, C>` where `P extends void`: `DeclarativeExtras`
+- For `ApiInfiniteQueryEndpoint<P, R, C>` where P is not void: `{ params: P } & DeclarativeExtras`
 - For mutations: `never`
+
+**DeclarativeExtras:**
+- `enabled?: boolean` — Pause/resume auto-fetching. Defaults to `true`.
+- `polling?: number` — Poll interval in milliseconds (queries only).
+- `refetchOnWindowFocus?: boolean` — Refetch when tab becomes visible.
+- `refetchOnReconnect?: boolean` — Refetch when browser comes back online.
+- `gcTime?: number` — Milliseconds before unmounted cache is garbage-collected.
 
 ### ApiCallOptions\<T\>
 
@@ -470,6 +653,53 @@ interface ApiMutationEndpoint<V, R> {
 }
 ```
 
+### ApiInfiniteQueryEndpoint
+
+Defines a cursor-based infinite query endpoint for the composer.
+
+```typescript
+interface ApiInfiniteQueryEndpoint<P, R, C = unknown> {
+  _type: 'infiniteQuery'
+  params: P
+  response: R   // per-page response type
+  cursor: C     // cursor type
+}
+```
+
+### InfiniteData
+
+The data shape stored for infinite queries.
+
+```typescript
+interface InfiniteData<R, C = unknown> {
+  pages: R[]
+  pageParams: (C | undefined)[]
+}
+```
+
+### ApiComposerInfiniteQueryResult
+
+Result type returned when accessing an infinite query endpoint via the composer.
+
+```typescript
+interface ApiComposerInfiniteQueryResult<R, P, C> {
+  pages: R[]
+  pageParams: (C | undefined)[]
+  status: FetchStatus
+  isFetching: boolean
+  isLoading: boolean
+  isFetchingNextPage: boolean
+  hasNextPage: boolean
+  isSuccess: boolean
+  isError: boolean
+  error: ApiError | null
+  fetchedAt: number | null
+  fetchNextPage: (options?: ApiCallOptions<InfiniteData<R, C>>) => Promise<InfiniteData<R, C> | undefined>
+  reset: () => void
+  invalidate: () => void
+}
+```
+
 ### FetchStatus
 
 ```typescript
@@ -495,11 +725,25 @@ interface ApiError extends Error {
 ## Complete Example
 
 ```typescript
-import { createApiComposer, ApiQueryEndpoint, ApiMutationEndpoint } from 'zustand-api-manager'
+import {
+  createApiComposer,
+  configureApiStore,
+  ApiQueryEndpoint,
+  ApiMutationEndpoint,
+  ApiInfiniteQueryEndpoint
+} from 'zustand-api-manager'
+
+// Global defaults
+configureApiStore({
+  defaultRefetchOnWindowFocus: true,
+  defaultRefetchOnReconnect: true,
+  defaultGcTime: 300_000
+})
 
 interface MyApi {
   listUsers: ApiQueryEndpoint<void, User[]>
   getUser: ApiQueryEndpoint<{ id: number }, User>
+  listPosts: ApiInfiniteQueryEndpoint<{ userId: number }, Post[], string>
   createUser: ApiMutationEndpoint<CreateUserPayload, User>
   deleteUser: ApiMutationEndpoint<{ id: number }, void>
 }
@@ -508,6 +752,12 @@ const useApi = createApiComposer<MyApi>({
   queries: {
     listUsers: () => api.listUsers(),
     getUser: (params) => api.getUser(params)
+  },
+  infiniteQueries: {
+    listPosts: {
+      queryFn: (params, cursor) => api.listPosts({ userId: params.userId, cursor }),
+      getNextCursor: (lastPage) => lastPage.nextCursor ?? null
+    }
   },
   mutations: {
     createUser: {
@@ -527,7 +777,7 @@ const useApi = createApiComposer<MyApi>({
   }
 })
 
-// Declarative query — auto-fetches
+// Declarative query — auto-fetches, refetches on focus/reconnect
 function UserList() {
   const { data, isLoading } = useApi('listUsers', {})
   if (isLoading) return <Loading />
@@ -538,6 +788,24 @@ function UserList() {
 function LiveUserList() {
   const { data } = useApi('listUsers', { polling: 30_000 })
   return <ul>{data?.map(u => <li key={u.id}>{u.name}</li>)}</ul>
+}
+
+// Infinite query — cursor-based pagination
+function PostFeed({ userId }: { userId: number }) {
+  const { pages, hasNextPage, isFetchingNextPage, fetchNextPage, isLoading } =
+    useApi('listPosts', { params: { userId } })
+
+  if (isLoading) return <Loading />
+  return (
+    <div>
+      {pages.flat().map(post => <PostCard key={post.id} post={post} />)}
+      {hasNextPage && (
+        <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          {isFetchingNextPage ? 'Loading more...' : 'Load More'}
+        </button>
+      )}
+    </div>
+  )
 }
 
 // Prefetch on hover, load on click
