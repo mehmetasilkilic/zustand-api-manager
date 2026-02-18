@@ -119,11 +119,10 @@ const normalizeError = (error: unknown): ApiError => {
   if (!(error instanceof Error) && error !== undefined) {
     ;(apiError as Error & { cause?: unknown }).cause = error
   }
-  if (error && typeof error === 'object' && 'status' in error) {
-    apiError.status = error.status as number
-  }
-  if (error && typeof error === 'object' && 'code' in error) {
-    apiError.code = error.code as string
+  if (error && typeof error === 'object') {
+    const obj = error as Record<string, unknown>
+    if (typeof obj.status === 'number') apiError.status = obj.status
+    if (typeof obj.code === 'string') apiError.code = obj.code
   }
   return apiError
 }
@@ -533,6 +532,7 @@ export function createApiStore(config: ApiStoreConfig = {}) {
       ? (devtools(persistedStore, {
           name: devtoolsName,
           enabled: process.env.NODE_ENV !== 'production'
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any)
       : persistedStore
   )
