@@ -33,11 +33,27 @@ import type { ApiComposerConfig, ApiStoreConfig } from './types'
  * })
  * ```
  */
-export function createApiStore(config?: ApiStoreConfig) {
+export function createApiStore<TApiStructure = never>(config?: ApiStoreConfig) {
   const { useStore } = createStoreInternal(config)
+
+  type UseLoadingStatesFn = {
+    (keys?: undefined): boolean
+    (keys: [TApiStructure] extends [never]
+      ? string | string[]
+      : (keyof TApiStructure & string) | (keyof TApiStructure & string)[]
+    ): boolean
+  }
+
+  const useLoadingStates: UseLoadingStatesFn = (
+    keys?: string | string[]
+  ): boolean => {
+    if (keys === undefined) return useLoadingStatesFn(undefined, useStore)
+    return useLoadingStatesFn(keys, useStore)
+  }
+
   return {
     useStore,
-    useLoadingStates: (keys?: string | string[]): boolean => useLoadingStatesFn(keys, useStore),
+    useLoadingStates,
     createApiComposer: <TApi>(composerConfig?: ApiComposerConfig<TApi>) =>
       createApiComposerFn<TApi>({ ...composerConfig, store: useStore })
   }

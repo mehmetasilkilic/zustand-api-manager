@@ -18,17 +18,25 @@ import type { StoreApi, UseBoundStore } from 'zustand'
  * // Check if any API call is loading
  * const isAnyLoading = useLoadingStates()
  *
- * // Check a single key
- * const isUserLoading = useLoadingStates('getUser')
+ * // Check a single key (type-safe with generic)
+ * const isUserLoading = useLoadingStates<MyApi>('getUser')
  *
  * // Check multiple keys
- * const isDataLoading = useLoadingStates(['getUser', 'getPosts'])
+ * const isDataLoading = useLoadingStates<MyApi>(['getUser', 'getPosts'])
  * ```
  */
-export const useLoadingStates = (
+export function useLoadingStates(
+  keys?: undefined,
+  store?: UseBoundStore<StoreApi<ApiStore>>
+): boolean
+export function useLoadingStates<TApiStructure>(
+  keys: (keyof TApiStructure & string) | (keyof TApiStructure & string)[],
+  store?: UseBoundStore<StoreApi<ApiStore>>
+): boolean
+export function useLoadingStates(
   keys?: string | string[],
   store?: UseBoundStore<StoreApi<ApiStore>>
-): boolean => {
+): boolean {
   const useStore = store ?? useApiStore
   return useStore(state => {
     if (!keys) {

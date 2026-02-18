@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useApiStore } from './store'
+import { useLoadingStates as useLoadingStatesFn } from './hooks'
 import { getGlobalConfig } from './config'
 import { onWindowFocus, onReconnect } from './focusManager'
 import {
@@ -657,7 +658,23 @@ export function createApiComposer<TApiStructure>(
     })
   }
 
-  useApiComposer.prefetch = prefetch
+  // ── Static useLoadingStates method ──
 
-  return useApiComposer as typeof useApiComposer & { prefetch: PrefetchFn }
+  type UseLoadingStatesFn = {
+    (keys?: undefined): boolean
+    (keys: (keyof TApiStructure & string) | (keyof TApiStructure & string)[]): boolean
+  }
+
+  const useLoadingStates: UseLoadingStatesFn = (
+    keys?: (keyof TApiStructure & string) | (keyof TApiStructure & string)[]
+  ): boolean => {
+    const store = config?.store ?? useApiStore
+    if (keys === undefined) return useLoadingStatesFn(undefined, store)
+    return useLoadingStatesFn(keys as string | string[], store)
+  }
+
+  useApiComposer.prefetch = prefetch
+  useApiComposer.useLoadingStates = useLoadingStates
+
+  return useApiComposer as typeof useApiComposer & { prefetch: PrefetchFn; useLoadingStates: UseLoadingStatesFn }
 }
